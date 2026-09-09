@@ -34,12 +34,11 @@ export default function QuietFloorPlan() {
           role="img"
           aria-label="ผังที่นั่งโซนเงียบ"
         >
+          {/* วาดพื้นหลังและเส้นอาคารก่อน แล้วค่อยวางจุดจองทับในพิกัดเดียวกับแปลน */}
           <Structure />
 
           {QUIET_SEATS.map((seat) => {
             const isSelected = seat.id === selectedId
-            const showLabel = seat.w >= 50 && seat.h >= 30
-
             return (
               <g
                 key={seat.id}
@@ -55,24 +54,11 @@ export default function QuietFloorPlan() {
                   rx={seat.kind === 'room' ? 4 : 3}
                   className={
                     isSelected
-                      ? 'fill-emerald-800 stroke-emerald-900'
-                      : 'fill-emerald-500 stroke-emerald-600 hover:fill-emerald-400'
+                      ? 'fill-emerald-700 stroke-black'
+                      : 'fill-[#39f51f] stroke-black hover:fill-[#6aff55]'
                   }
-                  strokeWidth="3"
+                  strokeWidth="2.5"
                 />
-                {showLabel && (
-                  <text
-                    x={seat.x + seat.w / 2}
-                    y={seat.y + seat.h / 2}
-                    textAnchor="middle"
-                    dominantBaseline="central"
-                    fontSize={Math.min(seat.w, seat.h, 60) * 0.42}
-                    fontWeight="600"
-                    className="pointer-events-none select-none fill-white"
-                  >
-                    {seat.id}
-                  </text>
-                )}
               </g>
             )
           })}
@@ -110,12 +96,17 @@ export default function QuietFloorPlan() {
 // ---------------------------------------------------------------
 function Structure() {
   return (
-    <g fill="none" stroke="#334155" strokeWidth="3.5" strokeLinejoin="miter">
+    <>
+      {/* แถบดำซ้ายสุดเป็นส่วนหนึ่งของภาพผังต้นฉบับ ไม่ใช่พื้นที่ใช้งาน */}
+      <rect width="285" height="1242" fill="#000" stroke="none" />
+
+      <g fill="none" stroke="#111111" strokeWidth="3.5" strokeLinejoin="miter">
       {/* ================= ผนังหลักของอาคาร ================= */}
       <path d="M295 128 H425 V8 H965 V150 H1035" />
       <path d="M295 128 V1115 H848" />
       <path d="M312 255 V1115" strokeWidth="3" />
-      <path d="M280 1180 H1035" />
+      {/* เส้นขอบล่างและแนวกำแพงนอกอาคาร ตามขอบภาพอ้างอิง */}
+      <path d="M280 1180 H1176 M280 1228 H1030 V1180" />
 
       {/* หมุดอ้างอิงบนแปลน (สามเหลี่ยมด้านบน) */}
       <path d="M566 0 H602 L584 28 Z" strokeWidth="2.5" />
@@ -206,7 +197,7 @@ function Structure() {
 
       {/* ================= โซนคาเฟ่ (นอกโซนเงียบ จองไม่ได้) ================= */}
       <rect x="1245" y="518" width="146" height="56" strokeWidth="2.5" />
-      <text x="1258" y="556" fontSize="30" fill="#334155" stroke="none">
+      <text x="1258" y="556" fontSize="30" fill="#111111" stroke="none">
         Café&apos; area
       </text>
       <path d="M1130 546 V492" strokeWidth="2" />
@@ -254,6 +245,7 @@ function Structure() {
         d="M545 993 A32 32 0 0 1 513 1025 M665 993 A32 32 0 0 1 633 1025 M792 993 A32 32 0 0 1 760 1025"
         strokeWidth="2"
       />
-    </g>
+      </g>
+    </>
   )
 }
