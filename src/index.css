@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'IBM Plex Sans Thai', system-ui, -apple-system, sans-serif;
+}
+
+@layer components {
+  /* ช่องกรอกข้อมูลมาตรฐานของแอป */
+  .field {
+    @apply w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-800
+           placeholder:text-slate-400 outline-none transition
+           focus:border-sky-500 focus:ring-4 focus:ring-sky-100;
+  }
+  .field-error {
+    @apply border-rose-400 focus:border-rose-500 focus:ring-rose-100;
+  }
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-slate-700;
+  }
+  .btn-primary {
+    @apply w-full rounded-xl bg-sky-600 px-4 py-3 font-semibold text-white transition
+           hover:bg-sky-700 active:scale-[.99] disabled:cursor-not-allowed disabled:opacity-60;
+  }
+}
