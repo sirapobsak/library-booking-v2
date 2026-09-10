@@ -1,11 +1,14 @@
 import { useState } from 'react'
-import { AlertCircle, BookOpen, Eye, EyeOff, Loader2 } from 'lucide-react'
+import { useLocation } from 'react-router-dom'
+import { AlertCircle, BookOpen, Eye, EyeOff, Loader2, Users } from 'lucide-react'
 import { useAuth, looksLikeEmail, normalizePhone } from '../auth.jsx'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export default function AuthPage() {
   const { login, register, offline } = useAuth()
+  // มาจากลิงก์/QR เข้าร่วมโต๊ะ -> บอกให้ล็อกอินก่อน แล้วระบบจะพากลับไปหน้าเดิมเอง
+  const joining = useLocation().state?.from?.startsWith('/join')
   const [mode, setMode] = useState('login')       // 'login' หรือ 'register'
   const [form, setForm] = useState({
     identifier: '', firstName: '', lastName: '', phone: '', email: '',
@@ -103,6 +106,13 @@ export default function AuthPage() {
           <h1 className="text-2xl font-bold text-slate-800">ระบบจองห้องสมุด</h1>
           <p className="mt-1 text-sm text-slate-500">เข้าสู่ระบบเพื่อจองโต๊ะและห้องประชุม</p>
         </div>
+
+        {joining && (
+          <div className="mb-4 flex gap-2 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+            <Users className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>เข้าสู่ระบบ (หรือลงทะเบียน) ด้วยบัญชีของคุณเอง เพื่อเข้าร่วมโต๊ะที่เพื่อนจองไว้</span>
+          </div>
+        )}
 
         {offline && (
           <div className="mb-4 flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">

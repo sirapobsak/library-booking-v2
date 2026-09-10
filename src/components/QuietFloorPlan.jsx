@@ -1,8 +1,22 @@
 import { useState } from 'react'
-import { CircleCheck, DoorClosed, LayoutGrid, Lock, MousePointerClick, User, Users } from 'lucide-react'
-import { useAuth } from '../auth.jsx'
-import { useSeatBookings } from '../bookings.js'
+import {
+  CalendarClock,
+  DoorClosed,
+  LayoutGrid,
+  MousePointerClick,
+  QrCode,
+  TriangleAlert,
+  User,
+  Users,
+} from 'lucide-react'
+import BookingModal from './BookingModal.jsx'
+import BookingQr from './BookingQr.jsx'
+import Modal from './Modal.jsx'
+import { isActive, useBookingApi, useZoneBookings } from '../bookings.js'
+import { seatName } from '../layouts/index.js'
 import { CANVAS, KIND_INFO, KIND_LABEL, QUIET_SEATS } from '../layouts/quietZone.js'
+
+const ZONE_ID = 'quiet'
 
 // ไอคอนประจำที่นั่งแต่ละแบบ (ใช้ในกล่องรายละเอียด)
 const KIND_ICON = { carrel: LayoutGrid, table: Users, desk: User, room: DoorClosed }
@@ -19,7 +33,7 @@ const C = {
   woodEdge: '#8b6b43',
 }
 
-// หน้าตาที่นั่งตามสถานะ: ว่าง / ถูกจอง  x  เลือกอยู่ / ไม่ได้เลือก
+// หน้าตาที่นั่งตามสถานะ: ว่าง / มีคนจอง  x  เลือกอยู่ / ไม่ได้เลือก
 const SEAT_STYLE = {
   free: { fill: 'url(#qz-seat)', stroke: '#16a34a', text: '#14532d' },
   freeSelected: { fill: 'url(#qz-seat-selected)', stroke: '#14532d', text: '#ffffff', ring: '#4ade80' },
@@ -28,12 +42,30 @@ const SEAT_STYLE = {
 }
 
 export default function QuietFloorPlan() {
-  const { user } = useAuth()
-  const { bookings, book, cancel } = useSeatBookings('quiet')
+  const api = useBookingApi()
+  const { bookings, refresh, date, isLocal } = useZoneBookings(ZONE_ID)
   const [selectedId, setSelectedId] = useState(null)
-  const selected = QUIET_SEATS.find((s) => s.id === selectedId)
+  const [bookingOpen, setBookingOpen] = useState(false) // เปิดหน้าต่างจองอยู่ไหม
+  const [qrFor, setQrFor] = useState(null) // การจองที่กำลังเปิดดู QR
 
+  // เอาเฉพาะการจองที่ยังไม่จบ แล้วจัดกลุ่มตามที่นั่ง -> ที่นั่งไหนมีการจองเป็นสีแดง
+  const activeBySeat = {}
+  for (const b of bookings) {
+    if (!isActive(b)) continue
+    if (!activeBySeat[b.seatId]) activeBySeat[b.seatId] = []
+    activeBySeat[b.seatId].push(b)
+  }
+
+  const selected = QUIET_SEATS.find((s) => s.id === selectedId)
+  const selectedBookings = selected ? activeBySeat[selected.id] ?? [] : []
   const toggleSeat = (id) => setSelectedId((prev) => (prev === id ? null : id))
+
+  async function cancel(b) {
+    if (!window.confirm(`ยกเลิกการจอง ${b.start}–${b.end} น. ใช่ไหม?`)) return
+    const result = await api.cancel(b.id)
+    if (!result.ok) window.alert(result.message)
+    refresh()
+  }
 
   return (
     <div className="space-y-4">
@@ -64,7 +96,7 @@ export default function QuietFloorPlan() {
             {/* ================= ที่นั่ง (วางทับบนแปลน) ================= */}
             {QUIET_SEATS.map((seat) => {
               const isSelected = seat.id === selectedId
-              const isBooked = Boolean(bookings[seat.id])
+              const isBooked = Boolean(activeBySeat[seat.id])
               const isRoom = seat.kind === 'room'
               const style = SEAT_STYLE[`${isBooked ? 'booked' : 'free'}${isSelected ? 'Selected' : ''}`]
               // ชื่อบนช่อง: ห้องใช้ชื่อห้อง, โต๊ะเดี่ยวใช้รหัส, ช่องเล็ก (C/T) ไม่ใส่เพราะตัวหนังสือจะเล็กเกินอ่าน
@@ -141,15 +173,43 @@ export default function QuietFloorPlan() {
         <p className="px-5 pb-4 text-xs text-slate-400 lg:hidden">เลื่อนผังไปทางซ้าย-ขวาเพื่อดูส่วนที่เหลือ</p>
       </section>
 
+      {/* ยังไม่ได้รัน supabase/bookings.sql -> บอกตรง ๆ ว่าการจองยังเห็นแค่ในเครื่องนี้ */}
+      {isLocal && (
+        <div className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            ตอนนี้การจองบันทึกไว้ในเบราว์เซอร์เครื่องนี้เท่านั้น เพื่อนที่สแกน QR จากเครื่องอื่นจะยังเข้าร่วมไม่ได้ —
+            ผู้ดูแลต้องรัน <code className="rounded bg-amber-100 px-1">supabase/bookings.sql</code> บน Supabase ก่อน
+          </span>
+        </div>
+      )}
+
       {/* ================= กล่องจองที่นั่ง (ใต้ผัง) ================= */}
       <BookingPanel
         seat={selected}
-        booking={selected ? bookings[selected.id] : null}
-        isMine={selected ? bookings[selected.id]?.userId === user.id : false}
-        onBook={() => book(selected.id, user)}
-        onCancel={() => cancel(selected.id)}
+        seatBookings={selectedBookings}
+        onBook={() => setBookingOpen(true)}
+        onShowQr={setQrFor}
+        onCancel={cancel}
         onClose={() => setSelectedId(null)}
       />
+
+      {bookingOpen && selected && (
+        <BookingModal
+          zoneId={ZONE_ID}
+          seatId={selected.id}
+          date={date}
+          taken={selectedBookings}
+          onClose={() => setBookingOpen(false)}
+          onBooked={refresh}
+        />
+      )}
+
+      {qrFor && (
+        <Modal title={`QR เข้าร่วม · ${seatName(ZONE_ID, qrFor.seatId)}`} onClose={() => setQrFor(null)}>
+          <BookingQr bookingId={qrFor.id} code={qrFor.code} partySize={qrFor.partySize} />
+        </Modal>
+      )}
     </div>
   )
 }
@@ -166,11 +226,12 @@ function Legend({ swatch, children }) {
   )
 }
 
-// แสดงวันเวลาที่จองแบบไทย เช่น "10 ก.ย. 2569 22:30"
-const formatTime = (iso) =>
-  new Date(iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
+function Tag({ tone, children }) {
+  const tones = { red: 'bg-red-100 text-red-700', green: 'bg-green-100 text-green-700' }
+  return <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${tones[tone]}`}>{children}</span>
+}
 
-function BookingPanel({ seat, booking, isMine, onBook, onCancel, onClose }) {
+function BookingPanel({ seat, seatBookings, onBook, onShowQr, onCancel, onClose }) {
   // ยังไม่ได้เลือกที่นั่ง -> แถบคำแนะนำ
   if (!seat) {
     return (
@@ -178,80 +239,101 @@ function BookingPanel({ seat, booking, isMine, onBook, onCancel, onClose }) {
         <MousePointerClick className="h-5 w-5 shrink-0 text-slate-400" />
         <span>
           กดที่ช่อง<span className="font-semibold text-green-700">สีเขียว</span>ในผังเพื่อเลือกที่นั่ง ·
-          ช่อง<span className="font-semibold text-red-600">สีแดง</span>คือที่นั่งที่ถูกจองแล้ว
+          ช่อง<span className="font-semibold text-red-600">สีแดง</span>คือที่นั่งที่มีคนจองแล้ว
         </span>
       </div>
     )
   }
 
   const Icon = KIND_ICON[seat.kind]
-  const title = seat.label ?? seat.id
-
-  // สีกรอบ/หัวข้อเปลี่ยนตามสถานะ
-  const tone = booking
-    ? 'border-red-200 bg-red-50'
-    : 'border-green-200 bg-green-50'
-  const iconTone = booking ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700'
+  const booked = seatBookings.length > 0
 
   return (
-    <div className={`flex flex-col gap-4 rounded-3xl border p-5 sm:flex-row sm:items-center sm:justify-between ${tone}`}>
-      <div className="flex items-start gap-4">
-        <span className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl ${iconTone}`}>
-          <Icon className="h-6 w-6" />
-        </span>
-        <div>
-          <p className="text-lg font-bold text-slate-800">
-            {title}{' '}
-            <span className="text-sm font-medium text-slate-500">
-              {KIND_LABEL[seat.kind]} · รหัส {seat.id}
-            </span>
-          </p>
-
-          {!booking && <p className="mt-0.5 text-sm text-slate-600">{KIND_INFO[seat.kind]}</p>}
-
-          {booking && isMine && (
-            <p className="mt-1 flex items-center gap-1.5 text-sm font-medium text-red-700">
-              <CircleCheck className="h-4 w-4" />
-              คุณจองที่นั่งนี้แล้ว · {formatTime(booking.bookedAt)}
+    <div className={`rounded-3xl border p-5 ${booked ? 'border-red-200 bg-red-50/60' : 'border-green-200 bg-green-50/60'}`}>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex items-start gap-4">
+          <span
+            className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl ${
+              booked ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700'
+            }`}
+          >
+            <Icon className="h-6 w-6" />
+          </span>
+          <div>
+            <p className="text-lg font-bold text-slate-800">
+              {seat.label ?? seat.id}{' '}
+              <span className="text-sm font-medium text-slate-500">
+                {KIND_LABEL[seat.kind]} · รหัส {seat.id}
+              </span>
             </p>
-          )}
-
-          {booking && !isMine && (
-            <p className="mt-1 flex items-center gap-1.5 text-sm font-medium text-red-700">
-              <Lock className="h-4 w-4" />
-              ที่นั่งนี้ถูกจองแล้ว เลือกที่นั่งอื่นได้เลย
-            </p>
-          )}
+            <p className="mt-0.5 text-sm text-slate-600">{KIND_INFO[seat.kind]}</p>
+          </div>
         </div>
-      </div>
 
-      <div className="flex shrink-0 gap-2">
-        {!booking && (
+        <div className="flex shrink-0 gap-2">
           <button
             type="button"
             onClick={onBook}
             className="rounded-xl bg-green-600 px-5 py-2.5 font-semibold text-white shadow-sm transition hover:bg-green-700 active:scale-[.98]"
           >
-            จองที่นั่งนี้
+            {booked ? 'จองช่วงเวลาอื่น' : 'จองที่นั่งนี้'}
           </button>
-        )}
-        {booking && isMine && (
           <button
             type="button"
-            onClick={onCancel}
-            className="rounded-xl border border-red-300 bg-white px-5 py-2.5 font-semibold text-red-600 transition hover:bg-red-100"
+            onClick={onClose}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
           >
-            ยกเลิกการจอง
+            ปิด
           </button>
-        )}
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
-        >
-          ปิด
-        </button>
+        </div>
       </div>
+
+      {/* รายการจองของที่นั่งนี้วันนี้ */}
+      {booked && (
+        <div className="mt-4 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">การจองวันนี้</p>
+          {seatBookings.map((b) => (
+            <div
+              key={b.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white px-4 py-3 shadow-sm"
+            >
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                <CalendarClock className="h-4 w-4 text-red-500" />
+                <span className="font-semibold text-slate-800">
+                  {b.start}–{b.end} น.
+                </span>
+                <span className="text-slate-500">
+                  {b.memberCount + 1}/{b.partySize} คน
+                </span>
+                {b.isMine && <Tag tone="red">การจองของคุณ</Tag>}
+                {b.isMember && <Tag tone="green">คุณเข้าร่วมแล้ว</Tag>}
+              </div>
+
+              {b.isMine && (
+                <div className="flex gap-2">
+                  {b.partySize > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => onShowQr(b)}
+                      className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                    >
+                      <QrCode className="h-4 w-4" />
+                      QR / รหัส
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onCancel(b)}
+                    className="rounded-xl border border-red-300 px-3 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+                  >
+                    ยกเลิกการจอง
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
