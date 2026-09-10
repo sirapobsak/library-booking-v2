@@ -6,7 +6,7 @@ import { ACCENT, getZone } from '../data.js'
 
 const ICONS = { MonitorPlay, Sofa, VolumeX }
 
-// หน้าถัดไปหลังเลือกโซน — ตอนนี้ยังเป็นหน้าเปล่ารอใส่ผังที่นั่ง
+// หน้าของแต่ละโซน — โซนเงียบมีผังที่นั่งแล้ว โซนอื่นยังรอทำ
 export default function ZonePage() {
   const { zoneId } = useParams()
   const zone = getZone(zoneId)
@@ -21,7 +21,7 @@ export default function ZonePage() {
     <div className="min-h-screen bg-slate-50">
       <Header />
 
-      <main className="mx-auto max-w-5xl px-5 py-10">
+      <main className="mx-auto max-w-6xl px-5 py-10">
         <Link
           to="/"
           className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 transition hover:text-slate-800"
@@ -30,7 +30,7 @@ export default function ZonePage() {
           กลับไปเลือกโซน
         </Link>
 
-        <div className="mt-5 flex items-start gap-4">
+        <div className="mt-5 flex items-start gap-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <span className={`grid h-14 w-14 shrink-0 place-items-center rounded-2xl ${color.icon}`}>
             <Icon className="h-7 w-7" />
           </span>
@@ -42,7 +42,7 @@ export default function ZonePage() {
 
         {/* โซนที่วาดผังไว้แล้วก็แสดงผัง ที่เหลือยังเป็นหน้าเปล่ารอทำต่อ */}
         {zone.id === 'quiet' ? (
-          <div className="mt-8">
+          <div className="mt-6">
             <QuietFloorPlan />
           </div>
         ) : (

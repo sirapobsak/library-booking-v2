@@ -48,9 +48,9 @@ export const DESKS = [
 
 // 4) ห้องเงียบด้านล่าง — 3 ห้อง
 export const ROOMS = [
-  { id: 'R1', x: 303, y: 993, w: 244, h: 117, kind: 'room' },
-  { id: 'R2', x: 547, y: 993, w: 121, h: 117, kind: 'room' },
-  { id: 'R3', x: 668, y: 993, w: 130, h: 117, kind: 'room' },
+  { id: 'R1', label: 'ห้อง 1', x: 303, y: 993, w: 244, h: 117, kind: 'room' },
+  { id: 'R2', label: 'ห้อง 2', x: 547, y: 993, w: 121, h: 117, kind: 'room' },
+  { id: 'R3', label: 'ห้อง 3', x: 668, y: 993, w: 130, h: 117, kind: 'room' },
 ]
 
 export const QUIET_SEATS = [...CARRELS, ...TABLE_SEATS, ...DESKS, ...ROOMS]
@@ -61,4 +61,15 @@ export const KIND_LABEL = {
   table: 'โต๊ะกลุ่ม',
   desk: 'โต๊ะเดี่ยว',
   room: 'ห้องเงียบ',
+}
+
+// ลำดับการแสดงประเภทที่นั่งในแผงด้านข้าง (บนลงล่างตามแปลน)
+export const KIND_ORDER = ['carrel', 'table', 'desk', 'room']
+
+// คำอธิบายสั้น ๆ ของแต่ละประเภท (โชว์ตอนเลือกที่นั่ง) — อิงตำแหน่งจากแปลนเท่านั้น
+export const KIND_INFO = {
+  carrel: 'โต๊ะเดี่ยวมีฉากกั้น อยู่มุมบนขวาติดชั้นหนังสือ',
+  table: 'ที่นั่งรอบโต๊ะกลุ่ม แถวใต้ชั้นหนังสือด้านบน',
+  desk: 'โต๊ะเดี่ยววางเรียงเป็นแถวกลางห้อง',
+  room: 'ห้องปิดมีประตู อยู่แถวล่างสุดของโซน',
 }
