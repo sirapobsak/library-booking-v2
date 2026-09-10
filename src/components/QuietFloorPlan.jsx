@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { DoorClosed, LayoutGrid, MousePointerClick, User, Users } from 'lucide-react'
-import { CANVAS, KIND_INFO, KIND_LABEL, KIND_ORDER, QUIET_SEATS } from '../layouts/quietZone.js'
+import { CircleCheck, DoorClosed, LayoutGrid, Lock, MousePointerClick, User, Users } from 'lucide-react'
+import { useAuth } from '../auth.jsx'
+import { useSeatBookings } from '../bookings.js'
+import { CANVAS, KIND_INFO, KIND_LABEL, QUIET_SEATS } from '../layouts/quietZone.js'
 
-// ไอคอนประจำที่นั่งแต่ละแบบ (ใช้ในแผงด้านข้าง)
+// ไอคอนประจำที่นั่งแต่ละแบบ (ใช้ในกล่องรายละเอียด)
 const KIND_ICON = { carrel: LayoutGrid, table: Users, desk: User, room: DoorClosed }
 
 // ---------- โทนสีของผัง (แก้สีทั้งผังได้ที่นี่ที่เดียว) ----------
@@ -15,20 +17,26 @@ const C = {
   wcFemale: '#fce7f3', // ห้องน้ำหญิง (ชมพูอ่อน)
   wood: '#eadcc3', // ชั้นหนังสือ/เคาน์เตอร์ (สีไม้)
   woodEdge: '#8b6b43',
-  seatEdge: '#16a34a',
-  seatText: '#14532d',
+}
+
+// หน้าตาที่นั่งตามสถานะ: ว่าง / ถูกจอง  x  เลือกอยู่ / ไม่ได้เลือก
+const SEAT_STYLE = {
+  free: { fill: 'url(#qz-seat)', stroke: '#16a34a', text: '#14532d' },
+  freeSelected: { fill: 'url(#qz-seat-selected)', stroke: '#14532d', text: '#ffffff', ring: '#4ade80' },
+  booked: { fill: 'url(#qz-seat-booked)', stroke: '#dc2626', text: '#7f1d1d' },
+  bookedSelected: { fill: 'url(#qz-seat-booked-selected)', stroke: '#7f1d1d', text: '#ffffff', ring: '#fca5a5' },
 }
 
 export default function QuietFloorPlan() {
+  const { user } = useAuth()
+  const { bookings, book, cancel } = useSeatBookings('quiet')
   const [selectedId, setSelectedId] = useState(null)
-  const [filter, setFilter] = useState(null) // null = แสดงทุกประเภท
   const selected = QUIET_SEATS.find((s) => s.id === selectedId)
 
   const toggleSeat = (id) => setSelectedId((prev) => (prev === id ? null : id))
-  const countOf = (kind) => QUIET_SEATS.filter((s) => s.kind === kind).length
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+    <div className="space-y-4">
       {/* ================= การ์ดผังที่นั่ง ================= */}
       <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
@@ -36,6 +44,7 @@ export default function QuietFloorPlan() {
           <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-slate-500">
             <Legend swatch="border-green-600 bg-green-200">ที่นั่งว่าง</Legend>
             <Legend swatch="border-green-900 bg-green-700">ที่เลือก</Legend>
+            <Legend swatch="border-red-600 bg-red-300">ถูกจองแล้ว</Legend>
             <Legend swatch="border-[#8b6b43] bg-[#eadcc3]">ชั้นหนังสือ</Legend>
             <Legend swatch="border-sky-300 bg-sky-100">ห้องน้ำชาย</Legend>
             <Legend swatch="border-pink-300 bg-pink-100">ห้องน้ำหญิง</Legend>
@@ -46,7 +55,7 @@ export default function QuietFloorPlan() {
         <div className="overflow-x-auto p-3 sm:p-5">
           <svg
             viewBox={`${CANVAS.x} ${CANVAS.y} ${CANVAS.width} ${CANVAS.height}`}
-            className="mx-auto h-auto w-full min-w-[560px] max-w-[760px]"
+            className="mx-auto h-auto w-full min-w-[560px] max-w-[780px]"
             role="group"
             aria-label="ผังที่นั่งโซนเงียบ"
           >
@@ -56,17 +65,19 @@ export default function QuietFloorPlan() {
             {/* ================= ที่นั่ง (วางทับบนแปลน) ================= */}
             {QUIET_SEATS.map((seat) => {
               const isSelected = seat.id === selectedId
-              const dimmed = filter !== null && seat.kind !== filter
+              const isBooked = Boolean(bookings[seat.id])
               const isRoom = seat.kind === 'room'
+              const style = SEAT_STYLE[`${isBooked ? 'booked' : 'free'}${isSelected ? 'Selected' : ''}`]
               // ชื่อบนช่อง: ห้องใช้ชื่อห้อง, โต๊ะเดี่ยวใช้รหัส, ช่องเล็ก (C/T) ไม่ใส่เพราะตัวหนังสือจะเล็กเกินอ่าน
               const label = isRoom ? seat.label : seat.kind === 'desk' ? seat.id : null
+              const name = `${KIND_LABEL[seat.kind]} ${seat.id}${isBooked ? ' (ถูกจองแล้ว)' : ''}`
 
               return (
                 <g
                   key={seat.id}
                   role="button"
-                  tabIndex={dimmed ? -1 : 0}
-                  aria-label={`${KIND_LABEL[seat.kind]} ${seat.id}`}
+                  tabIndex={0}
+                  aria-label={name}
                   aria-pressed={isSelected}
                   onClick={() => toggleSeat(seat.id)}
                   onKeyDown={(e) => {
@@ -75,10 +86,9 @@ export default function QuietFloorPlan() {
                       toggleSeat(seat.id)
                     }
                   }}
-                  opacity={dimmed ? 0.18 : 1}
-                  className="cursor-pointer outline-none transition-opacity duration-200 hover:brightness-95 [&:focus-visible>rect.qz-seat]:stroke-sky-500 [&:focus-visible>rect.qz-seat]:[stroke-width:5px]"
+                  className="cursor-pointer outline-none hover:brightness-95 [&:focus-visible>rect.qz-seat]:stroke-sky-500 [&:focus-visible>rect.qz-seat]:[stroke-width:5px]"
                 >
-                  <title>{`${KIND_LABEL[seat.kind]} ${seat.id}`}</title>
+                  <title>{name}</title>
 
                   {/* วงเรืองแสงรอบที่นั่งที่เลือก */}
                   {isSelected && (
@@ -89,7 +99,7 @@ export default function QuietFloorPlan() {
                       height={seat.h + 14}
                       rx={isRoom ? 12 : 10}
                       fill="none"
-                      stroke="#4ade80"
+                      stroke={style.ring}
                       strokeWidth="5"
                       opacity="0.85"
                     />
@@ -102,8 +112,8 @@ export default function QuietFloorPlan() {
                     width={seat.w}
                     height={seat.h}
                     rx={isRoom ? 7 : 6}
-                    fill={isSelected ? 'url(#qz-seat-selected)' : 'url(#qz-seat)'}
-                    stroke={isSelected ? '#14532d' : C.seatEdge}
+                    fill={style.fill}
+                    stroke={style.stroke}
                     strokeWidth="2.5"
                     filter="url(#qz-shadow)"
                   />
@@ -116,7 +126,7 @@ export default function QuietFloorPlan() {
                       dominantBaseline="central"
                       fontSize={isRoom ? 26 : 18}
                       fontWeight="700"
-                      fill={isSelected ? '#ffffff' : C.seatText}
+                      fill={style.text}
                       className="pointer-events-none select-none"
                     >
                       {label}
@@ -132,48 +142,15 @@ export default function QuietFloorPlan() {
         <p className="px-5 pb-4 text-xs text-slate-400 lg:hidden">เลื่อนผังไปทางซ้าย-ขวาเพื่อดูส่วนที่เหลือ</p>
       </section>
 
-      {/* ================= แผงด้านข้าง ================= */}
-      <aside className="space-y-4">
-        {/* จำนวนที่นั่ง + ตัวกรองตามประเภท */}
-        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">ที่นั่งทั้งหมดในโซน</p>
-          <p className="mt-1 text-3xl font-bold text-slate-800">
-            {QUIET_SEATS.length} <span className="text-base font-medium text-slate-400">จุด</span>
-          </p>
-
-          <p className="mt-5 text-xs font-medium uppercase tracking-wide text-slate-400">ไฮไลต์ตามประเภท</p>
-          <div className="mt-2 space-y-1.5">
-            <FilterButton active={filter === null} onClick={() => setFilter(null)} count={QUIET_SEATS.length}>
-              ทั้งหมด
-            </FilterButton>
-            {KIND_ORDER.map((kind) => {
-              const Icon = KIND_ICON[kind]
-              return (
-                <FilterButton
-                  key={kind}
-                  active={filter === kind}
-                  onClick={() => setFilter((prev) => (prev === kind ? null : kind))}
-                  count={countOf(kind)}
-                  icon={<Icon className="h-4 w-4" />}
-                >
-                  {KIND_LABEL[kind]}
-                </FilterButton>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* รายละเอียดที่นั่งที่เลือก */}
-        {selected ? (
-          <SelectedCard seat={selected} onClear={() => setSelectedId(null)} />
-        ) : (
-          <div className="rounded-3xl border border-dashed border-slate-300 bg-white/60 p-6 text-center">
-            <MousePointerClick className="mx-auto h-8 w-8 text-slate-300" />
-            <p className="mt-2 font-medium text-slate-600">ยังไม่ได้เลือกที่นั่ง</p>
-            <p className="mt-1 text-sm text-slate-400">กดที่ช่องสีเขียวในผังเพื่อดูรายละเอียด</p>
-          </div>
-        )}
-      </aside>
+      {/* ================= กล่องจองที่นั่ง (ใต้ผัง) ================= */}
+      <BookingPanel
+        seat={selected}
+        booking={selected ? bookings[selected.id] : null}
+        isMine={selected ? bookings[selected.id]?.userId === user.id : false}
+        onBook={() => book(selected.id, user)}
+        onCancel={() => cancel(selected.id)}
+        onClose={() => setSelectedId(null)}
+      />
     </div>
   )
 }
@@ -190,62 +167,90 @@ function Legend({ swatch, children }) {
   )
 }
 
-function FilterButton({ active, onClick, count, icon, children }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm transition ${
-        active
-          ? 'bg-green-50 font-semibold text-green-800 ring-1 ring-green-600'
-          : 'text-slate-600 hover:bg-slate-50'
-      }`}
-    >
-      <span className="flex items-center gap-2">
-        {icon ?? <span className="h-4 w-4" />}
-        {children}
-      </span>
-      <span
-        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-          active ? 'bg-green-600 text-white' : 'bg-slate-100 text-slate-500'
-        }`}
-      >
-        {count}
-      </span>
-    </button>
-  )
-}
+// แสดงวันเวลาที่จองแบบไทย เช่น "10 ก.ย. 2569 22:30"
+const formatTime = (iso) =>
+  new Date(iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
 
-function SelectedCard({ seat, onClear }) {
-  const Icon = KIND_ICON[seat.kind]
-  return (
-    <div className="overflow-hidden rounded-3xl border border-green-200 bg-white shadow-sm">
-      <div className="bg-gradient-to-br from-green-500 to-green-700 p-5 text-white">
-        <p className="text-sm text-green-100">ที่นั่งที่เลือก</p>
-        <p className="mt-1 flex items-center gap-2 text-2xl font-bold">
-          <Icon className="h-6 w-6" />
-          {seat.label ?? seat.id}
-        </p>
-        <p className="mt-0.5 text-sm text-green-50">
-          {KIND_LABEL[seat.kind]} · รหัส {seat.id}
-        </p>
+function BookingPanel({ seat, booking, isMine, onBook, onCancel, onClose }) {
+  // ยังไม่ได้เลือกที่นั่ง -> แถบคำแนะนำ
+  if (!seat) {
+    return (
+      <div className="flex items-center gap-3 rounded-3xl border border-dashed border-slate-300 bg-white/60 px-5 py-4 text-sm text-slate-500">
+        <MousePointerClick className="h-5 w-5 shrink-0 text-slate-400" />
+        <span>
+          กดที่ช่อง<span className="font-semibold text-green-700">สีเขียว</span>ในผังเพื่อเลือกที่นั่ง ·
+          ช่อง<span className="font-semibold text-red-600">สีแดง</span>คือที่นั่งที่ถูกจองแล้ว
+        </span>
       </div>
-      <div className="space-y-3 p-5">
-        <p className="text-sm leading-relaxed text-slate-600">{KIND_INFO[seat.kind]}</p>
-        <button
-          disabled
-          title="ระบบจองจะมาในขั้นถัดไป"
-          className="w-full rounded-xl bg-green-600 px-4 py-2.5 font-semibold text-white opacity-60"
-        >
-          จองที่นั่งนี้ (เร็ว ๆ นี้)
-        </button>
+    )
+  }
+
+  const Icon = KIND_ICON[seat.kind]
+  const title = seat.label ?? seat.id
+
+  // สีกรอบ/หัวข้อเปลี่ยนตามสถานะ
+  const tone = booking
+    ? 'border-red-200 bg-red-50'
+    : 'border-green-200 bg-green-50'
+  const iconTone = booking ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700'
+
+  return (
+    <div className={`flex flex-col gap-4 rounded-3xl border p-5 sm:flex-row sm:items-center sm:justify-between ${tone}`}>
+      <div className="flex items-start gap-4">
+        <span className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl ${iconTone}`}>
+          <Icon className="h-6 w-6" />
+        </span>
+        <div>
+          <p className="text-lg font-bold text-slate-800">
+            {title}{' '}
+            <span className="text-sm font-medium text-slate-500">
+              {KIND_LABEL[seat.kind]} · รหัส {seat.id}
+            </span>
+          </p>
+
+          {!booking && <p className="mt-0.5 text-sm text-slate-600">{KIND_INFO[seat.kind]}</p>}
+
+          {booking && isMine && (
+            <p className="mt-1 flex items-center gap-1.5 text-sm font-medium text-red-700">
+              <CircleCheck className="h-4 w-4" />
+              คุณจองที่นั่งนี้แล้ว · {formatTime(booking.bookedAt)}
+            </p>
+          )}
+
+          {booking && !isMine && (
+            <p className="mt-1 flex items-center gap-1.5 text-sm font-medium text-red-700">
+              <Lock className="h-4 w-4" />
+              ที่นั่งนี้ถูกจองแล้ว เลือกที่นั่งอื่นได้เลย
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="flex shrink-0 gap-2">
+        {!booking && (
+          <button
+            type="button"
+            onClick={onBook}
+            className="rounded-xl bg-green-600 px-5 py-2.5 font-semibold text-white shadow-sm transition hover:bg-green-700 active:scale-[.98]"
+          >
+            จองที่นั่งนี้
+          </button>
+        )}
+        {booking && isMine && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-xl border border-red-300 bg-white px-5 py-2.5 font-semibold text-red-600 transition hover:bg-red-100"
+          >
+            ยกเลิกการจอง
+          </button>
+        )}
         <button
           type="button"
-          onClick={onClear}
-          className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+          onClick={onClose}
+          className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
         >
-          ยกเลิกการเลือก
+          ปิด
         </button>
       </div>
     </div>
@@ -267,6 +272,7 @@ function Defs() {
         <rect width="12" height="12" fill="#e2e8f0" />
         <line x1="0" y1="0" x2="0" y2="12" stroke="#94a3b8" strokeWidth="3" />
       </pattern>
+      {/* ที่นั่งว่าง (เขียว) */}
       <linearGradient id="qz-seat" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stopColor="#bbf7d0" />
         <stop offset="1" stopColor="#86efac" />
@@ -275,8 +281,17 @@ function Defs() {
         <stop offset="0" stopColor="#22c55e" />
         <stop offset="1" stopColor="#15803d" />
       </linearGradient>
+      {/* ที่นั่งที่ถูกจองแล้ว (แดง) */}
+      <linearGradient id="qz-seat-booked" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#fecaca" />
+        <stop offset="1" stopColor="#f87171" />
+      </linearGradient>
+      <linearGradient id="qz-seat-booked-selected" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#ef4444" />
+        <stop offset="1" stopColor="#b91c1c" />
+      </linearGradient>
       <filter id="qz-shadow" x="-20%" y="-20%" width="140%" height="160%">
-        <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#14532d" floodOpacity="0.25" />
+        <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#1e293b" floodOpacity="0.22" />
       </filter>
     </defs>
   )
@@ -385,17 +400,17 @@ function Structure() {
   )
 }
 
-// บานประตูห้องเงียบ — วาดทับหลังที่นั่ง จะได้มองเห็นบนพื้นสีเขียว
+// บานประตูห้องเงียบ — วาดทับหลังที่นั่ง จะได้มองเห็นบนพื้นสีเขียว/แดง
 function DoorOverlay() {
   return (
     <g className="pointer-events-none">
       <path
         d="M517 993 A26 26 0 0 0 543 1019 M638 993 A26 26 0 0 0 664 1019 M760 993 A26 26 0 0 0 786 1019"
         fill="none"
-        stroke="#14532d"
+        stroke="#1e293b"
         strokeWidth="2.5"
         strokeDasharray="5 4"
-        opacity="0.55"
+        opacity="0.45"
       />
       <path
         d="M538 984 h18 v10 h-18 z M657 984 h18 v10 h-18 z M779 984 h18 v10 h-18 z"
