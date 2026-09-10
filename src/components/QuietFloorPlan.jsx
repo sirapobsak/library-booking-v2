@@ -11,11 +11,11 @@ const KIND_ICON = { carrel: LayoutGrid, table: Users, desk: User, room: DoorClos
 const C = {
   wall: '#1e293b', // ผนัง
   floor: '#fdfcf8', // พื้นในโซน (ขาวอมครีม)
-  corridor: '#eef1f5', // ทางเดิน
+  corridor: '#eef1f5', // พื้นที่นอกโซนด้านล่าง/ขวา
   room: '#f1f5f9', // ห้องอื่น ๆ ที่ไม่ใช่ที่นั่ง
   wcMale: '#e0f2fe', // ห้องน้ำชาย (ฟ้าอ่อน)
   wcFemale: '#fce7f3', // ห้องน้ำหญิง (ชมพูอ่อน)
-  wood: '#eadcc3', // ชั้นหนังสือ/เคาน์เตอร์ (สีไม้)
+  wood: '#eadcc3', // เฟอร์นิเจอร์/โครงสร้างในแปลน (สีไม้)
   woodEdge: '#8b6b43',
 }
 
@@ -45,7 +45,6 @@ export default function QuietFloorPlan() {
             <Legend swatch="border-green-600 bg-green-200">ที่นั่งว่าง</Legend>
             <Legend swatch="border-green-900 bg-green-700">ที่เลือก</Legend>
             <Legend swatch="border-red-600 bg-red-300">ถูกจองแล้ว</Legend>
-            <Legend swatch="border-[#8b6b43] bg-[#eadcc3]">ชั้นหนังสือ</Legend>
             <Legend swatch="border-sky-300 bg-sky-100">ห้องน้ำชาย</Legend>
             <Legend swatch="border-pink-300 bg-pink-100">ห้องน้ำหญิง</Legend>
           </div>
@@ -313,7 +312,7 @@ function Structure() {
         d="M300 1110 V122 H660 V3 H965 V315 L1025 380 L968 432 V565 L995 592 V775 L968 802 L1025 865 L905 990 V1110 Z"
         fill={C.floor}
       />
-      {/* ทางเดินรูปตัวแอล (ขอบล่าง + เฉียงออกไปทางขวา) */}
+      {/* พื้นที่นอกโซนรูปตัวแอล (ขอบล่าง + เฉียงออกไปทางขวา) */}
       <path
         d="M285 1110 H905 V990 L1025 865 L1090 805 H1385 V868 H1150 L1030 985 V1228 H285 Z"
         fill={C.corridor}
@@ -330,19 +329,19 @@ function Structure() {
         <path d="M300 868 H378 V890 H425 V990 H300 Z" fill={C.wcMale} />
       </g>
 
-      {/* ---------- ชั้นหนังสือ / เคาน์เตอร์ (สีไม้) ---------- */}
+      {/* ---------- เฟอร์นิเจอร์/โครงสร้างในแปลน (สีไม้) ---------- */}
       <g fill={C.wood} stroke={C.woodEdge} strokeWidth="3" strokeLinejoin="round">
-        {/* ชั้นรูปตัวแอล ด้านบนซ้าย */}
+        {/* รูปตัวแอล ด้านบนซ้าย */}
         <path d="M460 158 H580 V185 H487 V320 H460 Z" />
-        {/* ชั้นรูปตัวแอล ด้านบนกลาง */}
+        {/* รูปตัวแอล ด้านบนกลาง */}
         <path d="M610 158 H703 V88 H725 V185 H610 Z" />
-        {/* ชั้นแนวตั้งด้านขวา 2 ตัว */}
+        {/* แนวตั้งด้านขวา 2 ชิ้น */}
         <rect x="896" y="88" width="24" height="70" rx="2" />
         <rect x="896" y="180" width="24" height="140" rx="2" />
-        {/* ชั้นแนวนอนใต้โต๊ะกลุ่ม */}
+        {/* แนวนอนใต้โต๊ะกลุ่ม */}
         <rect x="510" y="295" width="262" height="25" rx="2" />
         <rect x="797" y="295" width="75" height="25" rx="2" />
-        {/* เคาน์เตอร์ยาวฝั่งซ้าย (ปลายล่างตัดเฉียง) */}
+        {/* ชิ้นยาวฝั่งซ้าย (ปลายล่างตัดเฉียง) */}
         <path d="M465 560 H540 V835 L465 915 Z" />
       </g>
 
@@ -390,12 +389,6 @@ function Structure() {
       <ToiletIcon type="female" cx={350} y={675} />
       <ToiletIcon type="female" cx={350} y={768} />
       <ToiletIcon type="male" cx={350} y={918} />
-
-      {/* ---------- ป้ายชื่อพื้นที่ ---------- */}
-      <g fill="#94a3b8" fontWeight="600" className="select-none" letterSpacing="2">
-        <text x="600" y="1178" fontSize="28" textAnchor="middle">ทางเดิน</text>
-        <text x="1268" y="846" fontSize="24" textAnchor="middle">ทางเดิน</text>
-      </g>
     </>
   )
 }
