@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { CANVAS, KIND_LABEL, QUIET_SEATS } from '../layouts/quietZone.js'
 
 // ผังที่นั่งโซนเงียบ — วาดตามแปลนของห้องสมุด
-// เส้นสีเทา = โครงสร้างอาคาร (ผนัง ชั้นหนังสือ บันได ลิฟต์ โซนคาเฟ่)
+// เส้นดำ = โครงสร้างอาคาร (ผนัง ชั้นหนังสือ ห้องน้ำ ทางเดิน)
 // ช่องสีเขียว = ที่นั่งที่จองได้ กดเลือกได้
 export default function QuietFloorPlan() {
   const [selectedId, setSelectedId] = useState(null)
@@ -13,15 +13,15 @@ export default function QuietFloorPlan() {
       {/* คำอธิบายสัญลักษณ์ */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-slate-600">
         <span className="flex items-center gap-2">
-          <span className="h-4 w-4 rounded border border-emerald-600 bg-emerald-500" />
+          <span className="h-4 w-4 rounded border border-black bg-[#39f51f]" />
           ที่นั่งว่าง
         </span>
         <span className="flex items-center gap-2">
-          <span className="h-4 w-4 rounded border-2 border-emerald-900 bg-emerald-800" />
+          <span className="h-4 w-4 rounded border border-black bg-emerald-700" />
           ที่นั่งที่เลือก
         </span>
         <span className="flex items-center gap-2">
-          <span className="h-4 w-4 rounded border border-slate-300 bg-white" />
+          <span className="h-4 w-4 rounded border border-slate-400 bg-white" />
           โครงสร้างอาคาร (จองไม่ได้)
         </span>
       </div>
@@ -29,12 +29,12 @@ export default function QuietFloorPlan() {
       {/* ตัวผัง — จอเล็กเลื่อนดูซ้ายขวาได้ */}
       <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white p-3">
         <svg
-          viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`}
-          className="h-auto w-full min-w-[760px]"
+          viewBox={`${CANVAS.x} ${CANVAS.y} ${CANVAS.width} ${CANVAS.height}`}
+          className="mx-auto h-auto w-full min-w-[560px] max-w-3xl"
           role="img"
           aria-label="ผังที่นั่งโซนเงียบ"
         >
-          {/* วาดพื้นหลังและเส้นอาคารก่อน แล้วค่อยวางจุดจองทับในพิกัดเดียวกับแปลน */}
+          {/* วาดเส้นอาคารก่อน แล้วค่อยวางที่นั่งทับในพิกัดเดียวกับแปลน */}
           <Structure />
 
           {QUIET_SEATS.map((seat) => {
@@ -92,160 +92,99 @@ export default function QuietFloorPlan() {
 }
 
 // ---------------------------------------------------------------
-// โครงสร้างอาคาร (ไม่ใช่ที่นั่ง) — ผนัง ชั้นหนังสือ บันได ลิฟต์ ฯลฯ
+// โครงสร้างอาคาร (ไม่ใช่ที่นั่ง) — ลอกตามแปลนเวอร์ชันล่าสุด
+// พิกัดเป็นตำแหน่งพิกเซลบนรูปแปลน ใช้ระบบเดียวกับที่นั่งใน quietZone.js
 // ---------------------------------------------------------------
 function Structure() {
   return (
-    <>
-      {/* แถบดำซ้ายสุดเป็นส่วนหนึ่งของภาพผังต้นฉบับ ไม่ใช่พื้นที่ใช้งาน */}
-      <rect width="285" height="1242" fill="#000" stroke="none" />
+    <g fill="none" stroke="#111111" strokeWidth="4" strokeLinejoin="miter">
+      {/* ================= ผนังรอบนอก ================= */}
+      {/* ซ้าย -> บนซ้าย -> ช่องยื่นด้านบน -> ลงมาทางขวา */}
+      <path d="M300 1110 V122 H660 V3 H965 V315" />
 
-      <g fill="none" stroke="#111111" strokeWidth="3.5" strokeLinejoin="miter">
-      {/* ================= ผนังหลักของอาคาร ================= */}
-      <path d="M295 128 H425 V8 H965 V150 H1035" />
-      <path d="M295 128 V1115 H848" />
-      <path d="M312 255 V1115" strokeWidth="3" />
-      {/* เส้นขอบล่างและแนวกำแพงนอกอาคาร ตามขอบภาพอ้างอิง */}
-      <path d="M280 1180 H1176 M280 1228 H1030 V1180" />
+      {/* ผนังขวาของโซนที่นั่ง — หยักเข้าออกตามแปลน แล้วหักเฉียงลงมาปิดมุมล่าง */}
+      <path d="M965 315 L1025 380 L968 432 V565 L995 592 V775 L968 802 L1025 865 L905 990 V1110 H300" />
 
-      {/* หมุดอ้างอิงบนแปลน (สามเหลี่ยมด้านบน) */}
-      <path d="M566 0 H602 L584 28 Z" strokeWidth="2.5" />
-      <path d="M652 30 H690 L671 58 Z" strokeWidth="2.5" />
-      <path d="M671 0 V30" strokeWidth="2.5" />
+      {/* ทางเดินที่ออกไปทางขวา 2 เส้น */}
+      <path d="M1025 380 H1385" />
+      <path d="M1025 865 L1090 805 H1385" />
+
+      {/* ขอบนอกด้านล่าง + ทางเดินขวาล่าง */}
+      <path d="M285 1228 H1030 V985 L1150 868 H1385" />
 
       {/* ================= แถบห้องด้านซ้าย ================= */}
-      <path d="M425 128 V1115" />
-      <path
-        d="M312 255 H425 M312 545 H425 M312 640 H425 M312 730 H425 M312 845 H425"
-        strokeWidth="3"
-      />
-      <path d="M370 845 V908 H425" strokeWidth="3" />
-      {/* สัญลักษณ์รูปโบว์ + เส้นชี้ลงมาที่บันได */}
-      <path d="M372 297 L334 270 A34 34 0 0 0 334 324 Z" strokeWidth="2.5" />
-      <path d="M372 297 L410 270 A34 34 0 0 1 410 324 Z" strokeWidth="2.5" />
-      <path d="M372 297 V400" strokeWidth="2.5" />
-      <path d="M312 258 H358" strokeWidth="2.5" strokeDasharray="12 9" />
-      <path d="M358 258 H425" strokeWidth="2.5" />
+      {/* ผนังในแนวตั้ง (x = 425) มีช่องประตูเว้นไว้เป็นช่วง ๆ */}
+      <path d="M425 122 V160 H400" />
+      <path d="M400 210 H425 V412" />
+      <path d="M300 248 H425" />
+      <path d="M306 250 V412" strokeWidth="2.5" />
 
-      {/* โคมไฟ/ช่องแสงครึ่งวงกลม */}
-      <path d="M400 198 A27 27 0 0 1 454 198 Z" strokeWidth="2.5" />
+      {/* ห้อง/ทางเชื่อมแนวนอนกลางแถบซ้าย */}
+      <path d="M300 412 H565 V428" />
+      <path d="M565 455 V495 H300" />
 
-      {/* ================= บันไดฝั่งซ้าย ================= */}
-      <path d="M358 402 A34 34 0 0 0 358 470" strokeWidth="2.5" />
-      <rect x="358" y="398" width="66" height="92" strokeWidth="3" />
-      <path d="M372 398 V490 M386 398 V490 M400 398 V490 M414 398 V490" strokeWidth="2" />
-      <rect x="424" y="428" width="116" height="62" strokeWidth="3" />
-      <path
-        d="M438 428 V490 M452 428 V490 M466 428 V490 M480 428 V490 M494 428 V490 M508 428 V490 M522 428 V490"
-        strokeWidth="2"
-      />
-      <path d="M540 430 A22 22 0 0 1 540 474" strokeWidth="2.5" />
-      <path d="M352 415 H556" strokeWidth="3" />
+      {/* ผนังในช่วงห้องน้ำ (เว้นช่องประตูแต่ละห้อง) */}
+      <path d="M425 495 V540 M425 566 V596 M425 626 V686 M425 714 V776 M425 802 V840 M425 868 V900 M425 930 V990" />
 
-      {/* ================= เคาน์เตอร์/ชั้นวางยาวฝั่งซ้าย ================= */}
-      <rect x="465" y="560" width="76" height="362" strokeWidth="3" />
-      <path d="M465 602 H541" strokeWidth="2" />
-      <path d="M480 560 V602 M495 560 V602 M511 560 V602 M526 560 V602" strokeWidth="2" />
-      <path
-        d="M519 620 h18 v18 h-18 z M519 662 h18 v18 h-18 z M519 704 h18 v18 h-18 z M519 746 h18 v18 h-18 z M519 788 h18 v18 h-18 z"
-        strokeWidth="2"
-      />
-      <path d="M486 640 h15 v15 h-15 z M486 726 h15 v15 h-15 z" strokeWidth="2" />
+      {/* ผนังกั้นระหว่างห้อง */}
+      <path d="M300 570 H425 M300 657 H425 M300 742 H425" />
+      <path d="M300 840 H378 V815 H425" />
+      <path d="M300 868 H378 V890 H425" />
 
-      {/* ================= ชั้นหนังสือด้านบน ================= */}
-      <rect x="465" y="150" width="115" height="30" strokeWidth="3" />
-      <rect x="600" y="150" width="100" height="30" strokeWidth="3" />
-      <rect x="700" y="140" width="96" height="32" strokeWidth="3" />
-      <rect x="700" y="88" width="26" height="54" strokeWidth="3" />
-      <rect x="898" y="88" width="26" height="106" strokeWidth="3" />
-      <rect x="898" y="206" width="26" height="78" strokeWidth="3" />
-      <rect x="510" y="290" width="278" height="32" strokeWidth="3" />
-      <rect x="795" y="290" width="78" height="32" strokeWidth="3" />
-      <path
-        d="M545 290 V322 M580 290 V322 M615 290 V322 M650 290 V322 M685 290 V322 M720 290 V322 M755 290 V322 M834 290 V322"
-        strokeWidth="1.8"
-      />
-      <path d="M500 150 V180 M540 150 V180 M632 150 V180 M666 150 V180 M748 140 V172" strokeWidth="1.8" />
-      <path d="M465 165 H580 M600 165 H700" strokeWidth="1.8" />
+      {/* ป้ายห้องน้ำ ชาย / หญิง / หญิง / ชาย */}
+      <ToiletIcon type="male" cx={350} y={585} />
+      <ToiletIcon type="female" cx={350} y={675} />
+      <ToiletIcon type="female" cx={350} y={768} />
+      <ToiletIcon type="male" cx={350} y={918} />
 
-      {/* กรอบบล็อกโต๊ะมีฉากกั้น (3x3) */}
-      <rect x="742" y="82" width="142" height="120" strokeWidth="3" />
+      {/* ================= ชั้นหนังสือ / เคาน์เตอร์ ================= */}
+      {/* ชั้นรูปตัวแอล ด้านบนซ้าย */}
+      <path d="M460 158 H580 V185 H487 V320 H460 Z" strokeWidth="3" />
+      {/* ชั้นรูปตัวแอล ด้านบนกลาง */}
+      <path d="M610 158 H703 V88 H725 V185 H610 Z" strokeWidth="3" />
+      {/* ชั้นแนวตั้งด้านขวา 2 ตัว */}
+      <rect x="896" y="88" width="24" height="70" strokeWidth="3" />
+      <rect x="896" y="180" width="24" height="140" strokeWidth="3" />
+      {/* ชั้นแนวนอนใต้โต๊ะกลุ่ม */}
+      <rect x="510" y="295" width="262" height="25" strokeWidth="3" />
+      <rect x="797" y="295" width="75" height="25" strokeWidth="3" />
 
-      {/* กรอบโต๊ะกลุ่ม 4 ชุด */}
-      <rect x="506" y="202" width="82" height="76" strokeWidth="2.5" />
-      <rect x="594" y="202" width="94" height="76" strokeWidth="2.5" />
-      <rect x="694" y="202" width="84" height="76" strokeWidth="2.5" />
-      <rect x="784" y="202" width="84" height="76" strokeWidth="2.5" />
+      {/* เคาน์เตอร์ยาวฝั่งซ้าย (ปลายล่างตัดเฉียง) */}
+      <path d="M465 560 H540 V835 L465 915 Z" strokeWidth="3" />
 
-      {/* โครงสร้างรูปตัวแอลกลางห้อง */}
-      <path
-        d="M678 620 V518 H772 M690 620 V530 H772 M702 620 V542 H772 M714 620 V554 H772"
-        strokeWidth="2.5"
-      />
-
-      {/* ================= ผนังฝั่งขวาของโซนที่นั่ง (ผนังคู่) ================= */}
-      {/* บนสุดหักมุมเข้าหาโซนที่นั่ง แล้วลงตรง ๆ ก่อนหักเฉียงเข้าหามุมล่างซ้าย */}
-      <path d="M1105 148 H1030 V250 L975 308 V790 L848 952 V1115" />
-      <path d="M1122 165 H1048 V258 L993 316 V800 L866 966" strokeWidth="2.5" />
-
-      {/* ปล่องลิฟต์ + บันไดเลื่อนด้านบนขวา */}
-      <rect x="1040" y="0" width="65" height="148" strokeWidth="3" />
-      <path
-        d="M1105 148 H1420 M1120 136 H1420 M1135 124 H1420 M1150 112 H1420 M1165 100 H1420 M1180 88 H1420 M1195 76 H1420"
-        strokeWidth="2.5"
-      />
-
-      {/* ================= โซนคาเฟ่ (นอกโซนเงียบ จองไม่ได้) ================= */}
-      <rect x="1245" y="518" width="146" height="56" strokeWidth="2.5" />
-      <text x="1258" y="556" fontSize="30" fill="#111111" stroke="none">
-        Café&apos; area
-      </text>
-      <path d="M1130 546 V492" strokeWidth="2" />
-      <circle cx="1152" cy="512" r="9" strokeWidth="2" />
-      <circle cx="1185" cy="538" r="15" strokeWidth="2" />
-      <circle cx="1215" cy="553" r="8" strokeWidth="2" />
-      <circle cx="1188" cy="574" r="13" strokeWidth="2" />
-      <rect x="1258" y="483" width="26" height="26" strokeWidth="2" />
-      <path d="M1258 483 L1284 509 M1284 483 L1258 509" strokeWidth="2" />
-      <rect x="1140" y="730" width="24" height="24" strokeWidth="2" />
-      <circle cx="1152" cy="742" r="4" strokeWidth="2" />
-      <rect x="1362" y="632" width="60" height="60" strokeWidth="2.5" />
-      <path d="M1090 790 H1420" strokeWidth="3" />
-      <path d="M1268 750 V792" strokeWidth="2.5" />
-
-      {/* ================= บันไดเลื่อนด้านล่างขวา ================= */}
-      {/* ทางลาดเฉียงลงมาจากมุมผนัง */}
-      <path
-        d="M990 806 L1060 928 M1006 796 L1076 918 M1022 786 L1092 908"
-        strokeWidth="2.5"
-      />
-      {/* ขั้นบันไดเลื่อน — สี่เหลี่ยมซ้อนกันไล่ลงซ้าย */}
-      <rect x="1075" y="852" width="140" height="46" strokeWidth="2.5" />
-      <rect x="1060" y="874" width="155" height="56" strokeWidth="2.5" />
-      <rect x="1045" y="896" width="170" height="66" strokeWidth="2.5" />
-      <rect x="1030" y="918" width="185" height="76" strokeWidth="2.5" />
-      <rect x="1015" y="940" width="200" height="86" strokeWidth="2.5" />
-
-      {/* ลิฟต์ตรงมุมล่างของโซนที่นั่ง */}
-      <rect x="848" y="962" width="56" height="96" strokeWidth="3" />
-      <path d="M848 1000 H904" strokeWidth="2" />
-      <path d="M860 962 A22 22 0 0 0 892 1000" strokeWidth="2" />
-
-      {/* กล่อง/ห้องเล็กด้านล่างขวา */}
-      <rect x="962" y="1008" width="54" height="54" strokeWidth="2.5" />
-      <rect x="938" y="1088" width="64" height="64" strokeWidth="2.5" />
-
-      {/* ผนังโค้งมุมล่างขวา */}
-      <path d="M1198 1200 A260 260 0 0 1 1430 1082" strokeWidth="3" />
+      {/* เสา/โครงสร้างรูปตัวแอลกลางห้อง */}
+      <path d="M675 510 H772 V572 H737 V620 H675 Z" strokeWidth="3" />
 
       {/* ================= ห้องเงียบ 3 ห้องด้านล่าง ================= */}
-      <rect x="308" y="993" width="484" height="122" strokeWidth="3" />
-      <path d="M545 993 V1115 M665 993 V1115" strokeWidth="3" />
+      <path d="M300 990 H798 V1110" />
+      <path d="M547 990 V1110 M668 990 V1110" strokeWidth="3" />
+      {/* บานประตู (ส่วนโค้ง) + วงกบเล็ก ๆ เหนือประตู */}
       <path
-        d="M545 993 A32 32 0 0 1 513 1025 M665 993 A32 32 0 0 1 633 1025 M792 993 A32 32 0 0 1 760 1025"
-        strokeWidth="2"
+        d="M517 993 A26 26 0 0 0 543 1019 M638 993 A26 26 0 0 0 664 1019 M760 993 A26 26 0 0 0 786 1019"
+        strokeWidth="2.5"
       />
-      </g>
-    </>
+      <path
+        d="M538 984 h18 v10 h-18 z M657 984 h18 v10 h-18 z M779 984 h18 v10 h-18 z"
+        fill="#ffffff"
+        strokeWidth="2.5"
+      />
+    </g>
+  )
+}
+
+// ไอคอนห้องน้ำ (วาดเป็นรูปคนแบบป้ายห้องน้ำ) — cx = กึ่งกลางแนวนอน, y = ขอบบนของหัว
+function ToiletIcon({ type, cx, y }) {
+  return (
+    <g fill="#111111" stroke="none">
+      <title>{type === 'male' ? 'ห้องน้ำชาย' : 'ห้องน้ำหญิง'}</title>
+      <circle cx={cx} cy={y + 6} r="6.5" />
+      {type === 'male' ? (
+        <rect x={cx - 8} y={y + 15} width="16" height="25" rx="3" />
+      ) : (
+        <path d={`M${cx - 5} ${y + 15} H${cx + 5} L${cx + 12} ${y + 40} H${cx - 12} Z`} />
+      )}
+      <rect x={cx - 7} y={y + 39} width="5" height="20" />
+      <rect x={cx + 2} y={y + 39} width="5" height="20" />
+    </g>
   )
 }
