@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   AlertCircle,
+  ArrowRightLeft,
   Check,
   Copy,
   Cpu,
   History,
   KeyRound,
-  Power,
+  Plug,
   RefreshCw,
   Search,
   Settings,
   ShieldCheck,
   ShieldOff,
   Trash2,
+  Unplug,
   Users,
   Volume2,
 } from 'lucide-react'
@@ -481,6 +483,7 @@ function DevicesTab({ api }) {
   const [seat, setSeat] = useState('')
   const [busy, setBusy] = useState(null) // id อุปกรณ์ที่กำลังทำงาน หรือ 'create'
   const [keyInfo, setKeyInfo] = useState(null) // { id, key } — คีย์แสดงครั้งเดียว
+  const [moving, setMoving] = useState(null) // อุปกรณ์ที่กำลังจะย้ายโต๊ะ
   const [flash, setFlash] = useFlash()
 
   const load = useCallback(async () => {
@@ -498,6 +501,9 @@ function DevicesTab({ api }) {
     const t = setInterval(load, 10000)
     return () => clearInterval(t)
   }, [load])
+
+  // ที่นั่งที่มีเซนเซอร์ผูกอยู่แล้ว (โชว์ในตัวเลือกที่นั่ง)
+  const usedSeats = new Set((devices ?? []).map((d) => d.seatId))
 
   async function create(e) {
     e.preventDefault()
@@ -531,19 +537,48 @@ function DevicesTab({ api }) {
     }
   }
 
+  // ตัด/เชื่อมต่อ = เปิด-ปิดอุปกรณ์ในฐานข้อมูล — บอร์ดรู้เองจาก heartbeat ไม่ต้องแก้โค้ด
   async function toggle(d) {
+    if (
+      d.active &&
+      !window.confirm(
+        `ตัดการเชื่อมต่อ ${label(d)} กับเว็บ?\n` +
+          'บอร์ดจะหยุดเฝ้าเสียงและไม่หักแต้มใคร (ภายใน 30 วินาที)\n' +
+          'กด "เชื่อมต่ออีกครั้ง" ได้ทุกเมื่อ ไม่ต้องแก้โค้ดบนบอร์ด',
+      )
+    ) {
+      return
+    }
     const r = await act(d, () => api.updateDevice(d.id, { active: !d.active }))
-    if (r.ok) setFlash({ type: 'ok', text: `${d.active ? 'ปิด' : 'เปิด'}ใช้งาน ${label(d)} แล้ว` })
+    if (r.ok) {
+      setFlash({
+        type: 'ok',
+        text: d.active
+          ? `ตัดการเชื่อมต่อ ${label(d)} แล้ว — บอร์ดจะหยุดเฝ้าเสียงภายใน 30 วินาที`
+          : `เชื่อมต่อ ${label(d)} แล้ว — บอร์ดจะกลับมาเฝ้าเสียงภายใน 30 วินาที`,
+      })
+    }
+  }
+
+  async function move(d, seatId) {
+    const r = await act(d, () => api.updateDevice(d.id, { seatId }))
+    if (r.ok) {
+      setMoving(null)
+      setFlash({
+        type: 'ok',
+        text: `ย้าย ${label(d)} ไป ${seatName(d.zoneId, seatId)} แล้ว — ใช้คีย์เดิม ไม่ต้องแก้โค้ด บอร์ดจะรู้ภายใน 30 วินาที`,
+      })
+    }
   }
 
   async function newKey(d) {
-    if (!window.confirm(`สร้างคีย์ใหม่ให้ ${label(d)}?\nคีย์เก่าจะใช้ไม่ได้ทันที ต้องอัปโหลดโค้ดใหม่ลงบอร์ด`)) return
+    if (!window.confirm(`สร้างคีย์ใหม่ให้ ${label(d)}?\nคีย์เก่าจะใช้ไม่ได้ทันที ต้องใส่คีย์ใหม่ในโค้ดบอร์ดแล้วอัปโหลดใหม่`)) return
     const r = await act(d, () => api.resetDeviceKey(d.id))
     if (r.ok) setKeyInfo({ id: d.id, key: r.data })
   }
 
   async function remove(d) {
-    if (!window.confirm(`ลบอุปกรณ์ ${label(d)}?\nบอร์ดตัวนี้จะส่งข้อมูลเข้าระบบไม่ได้อีก`)) return
+    if (!window.confirm(`ลบอุปกรณ์ ${label(d)} ถาวร?\nคีย์ของบอร์ดตัวนี้จะใช้ไม่ได้อีก (ถ้าแค่หยุดทดสอบ ใช้ "ตัดการเชื่อมต่อ" แทน)`)) return
     const r = await act(d, () => api.deleteDevice(d.id))
     if (r.ok) setFlash({ type: 'ok', text: `ลบ ${label(d)} แล้ว` })
   }
@@ -551,6 +586,25 @@ function DevicesTab({ api }) {
   return (
     <div>
       <FlashBar flash={flash} />
+
+      {/* ---------- วิธีเชื่อม / ตัด / ย้าย ---------- */}
+      <div className="mb-5 rounded-2xl border border-sky-100 bg-sky-50 p-4 text-sm text-sky-900">
+        <p className="font-semibold">เชื่อมต่อ / ตัดการเชื่อมต่อเซนเซอร์กับเว็บ</p>
+        <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
+          <li>
+            <b>เชื่อมต่อ:</b> เพิ่มอุปกรณ์ (เลือกโต๊ะ) → เอาคีย์ไปใส่ในส่วนที่ 1 ของ main.py บนบอร์ด (ทำครั้งเดียว)
+          </li>
+          <li>
+            <b>หยุดทดสอบชั่วคราว:</b> กด “ตัดการเชื่อมต่อ” — บอร์ดหยุดเฝ้าเสียง ไม่หักแต้ม กลับมาเชื่อมใหม่ได้ ไม่ต้องแก้โค้ด
+          </li>
+          <li>
+            <b>ย้ายไปโต๊ะอื่น:</b> กด “ย้ายโต๊ะ” — ใช้คีย์เดิม ไม่ต้องแก้โค้ด
+          </li>
+          <li>
+            <b>เลิกใช้ถาวร:</b> กด “ลบ” — คีย์นี้ใช้ไม่ได้อีก
+          </li>
+        </ul>
+      </div>
 
       {/* ---------- เพิ่มอุปกรณ์ ---------- */}
       <form onSubmit={create} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -567,18 +621,7 @@ function DevicesTab({ api }) {
             maxLength={60}
             aria-label="ชื่อเรียกอุปกรณ์"
           />
-          <select className="field" value={seat} onChange={(e) => setSeat(e.target.value)} aria-label="ที่นั่งที่ติดอุปกรณ์">
-            <option value="">เลือกที่นั่ง ({getZone(DEVICE_ZONE)?.name})…</option>
-            {['carrel', 'table', 'desk', 'room'].map((kind) => (
-              <optgroup key={kind} label={KIND_LABEL[kind]}>
-                {QUIET_SEATS.filter((s) => s.kind === kind).map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label ? `${s.label} (${s.id})` : s.id}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+          <SeatSelect value={seat} onChange={setSeat} usedSeats={usedSeats} />
           <button
             type="submit"
             disabled={busy === 'create'}
@@ -599,7 +642,10 @@ function DevicesTab({ api }) {
           devices.map((d) => {
             const online = d.active && d.lastSeenAt && Date.now() - Date.parse(d.lastSeenAt) < ONLINE_MS
             return (
-              <div key={d.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div
+                key={d.id}
+                className={`rounded-2xl border bg-white p-4 shadow-sm ${d.active ? 'border-slate-200' : 'border-dashed border-slate-300'}`}
+              >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="flex flex-wrap items-center gap-2 font-semibold text-slate-800">
@@ -607,11 +653,17 @@ function DevicesTab({ api }) {
                       <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600">{d.id}</code>
                     </p>
                     <p className="text-sm text-slate-500">
-                      {getZone(d.zoneId)?.name ?? d.zoneId} · {seatName(d.zoneId, d.seatId)}
+                      ผูกกับ <b className="text-slate-700">{seatName(d.zoneId, d.seatId)}</b> · {getZone(d.zoneId)?.name ?? d.zoneId}
                     </p>
                   </div>
                   <StatusPill active={d.active} online={online} />
                 </div>
+
+                {!d.active && (
+                  <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                    ตัดการเชื่อมต่ออยู่ — บอร์ดไม่เฝ้าเสียงและไม่หักแต้มใคร (จอบอร์ดขึ้น OFF)
+                  </p>
+                )}
 
                 <dl className="mt-3 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
                   <Stat label="ติดต่อล่าสุด" value={d.lastSeenAt ? ago(d.lastSeenAt) : 'ยังไม่เคย'} />
@@ -620,11 +672,15 @@ function DevicesTab({ api }) {
                 </dl>
 
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <DevButton onClick={() => simulate(d)} disabled={busy === d.id} tone="amber">
-                    <Volume2 className="h-4 w-4" /> จำลองเสียงดัง
+                  <DevButton onClick={() => toggle(d)} disabled={busy === d.id} tone={d.active ? 'slate' : 'green'}>
+                    {d.active ? <Unplug className="h-4 w-4" /> : <Plug className="h-4 w-4" />}
+                    {d.active ? 'ตัดการเชื่อมต่อ' : 'เชื่อมต่ออีกครั้ง'}
                   </DevButton>
-                  <DevButton onClick={() => toggle(d)} disabled={busy === d.id}>
-                    <Power className="h-4 w-4" /> {d.active ? 'ปิดใช้งาน' : 'เปิดใช้งาน'}
+                  <DevButton onClick={() => setMoving(d)} disabled={busy === d.id}>
+                    <ArrowRightLeft className="h-4 w-4" /> ย้ายโต๊ะ
+                  </DevButton>
+                  <DevButton onClick={() => simulate(d)} disabled={busy === d.id || !d.active} tone="amber">
+                    <Volume2 className="h-4 w-4" /> จำลองเสียงดัง
                   </DevButton>
                   <DevButton onClick={() => newKey(d)} disabled={busy === d.id}>
                     <KeyRound className="h-4 w-4" /> สร้างคีย์ใหม่
@@ -640,16 +696,68 @@ function DevicesTab({ api }) {
       </div>
 
       {keyInfo && <KeyModal info={keyInfo} onClose={() => setKeyInfo(null)} />}
+      {moving && (
+        <MoveModal
+          device={moving}
+          usedSeats={usedSeats}
+          busy={busy === moving.id}
+          onMove={(seatId) => move(moving, seatId)}
+          onClose={() => setMoving(null)}
+        />
+      )}
     </div>
+  )
+}
+
+// เลือกที่นั่ง (จัดกลุ่มตามประเภท) — บอกด้วยว่าโต๊ะไหนมีเซนเซอร์อยู่แล้ว
+function SeatSelect({ value, onChange, usedSeats, currentSeat }) {
+  return (
+    <select className="field" value={value} onChange={(e) => onChange(e.target.value)} aria-label="ที่นั่งที่ติดอุปกรณ์">
+      <option value="">เลือกที่นั่ง ({getZone(DEVICE_ZONE)?.name})…</option>
+      {['carrel', 'table', 'desk', 'room'].map((kind) => (
+        <optgroup key={kind} label={KIND_LABEL[kind]}>
+          {QUIET_SEATS.filter((s) => s.kind === kind).map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.label ? `${s.label} (${s.id})` : s.id}
+              {s.id === currentSeat ? ' — ตอนนี้' : usedSeats?.has(s.id) ? ' — มีเซนเซอร์แล้ว' : ''}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  )
+}
+
+// ย้ายเซนเซอร์ไปโต๊ะอื่น — ใช้คีย์เดิม บอร์ดรู้เองจาก heartbeat
+function MoveModal({ device, usedSeats, busy, onMove, onClose }) {
+  const [seat, setSeat] = useState(device.seatId)
+  return (
+    <Modal title={`ย้ายโต๊ะ — ${device.name || device.id}`} onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-sm leading-relaxed text-slate-600">
+          ตอนนี้ผูกกับ <b className="text-slate-800">{seatName(device.zoneId, device.seatId)}</b> — เลือกโต๊ะใหม่
+          แล้วยกบอร์ดไปวางที่โต๊ะนั้น (ใช้คีย์เดิม ไม่ต้องแก้โค้ด บอร์ดรู้เองภายใน 30 วินาที)
+        </p>
+        <SeatSelect value={seat} onChange={setSeat} usedSeats={usedSeats} currentSeat={device.seatId} />
+        <button
+          type="button"
+          disabled={busy || !seat || seat === device.seatId}
+          onClick={() => onMove(seat)}
+          className="btn-primary"
+        >
+          ย้ายไปโต๊ะนี้
+        </button>
+      </div>
+    </Modal>
   )
 }
 
 function StatusPill({ active, online }) {
   const [cls, dot, text] = !active
-    ? ['bg-slate-100 text-slate-500', 'bg-slate-400', 'ปิดใช้งาน']
+    ? ['bg-slate-100 text-slate-500', 'bg-slate-400', 'ตัดการเชื่อมต่อ']
     : online
-      ? ['bg-green-50 text-green-700', 'bg-green-500', 'ออนไลน์']
-      : ['bg-slate-100 text-slate-500', 'bg-slate-300', 'ออฟไลน์']
+      ? ['bg-green-50 text-green-700', 'bg-green-500', 'เชื่อมต่อแล้ว · ออนไลน์']
+      : ['bg-amber-50 text-amber-700', 'bg-amber-400', 'เชื่อมต่อแล้ว · บอร์ดออฟไลน์']
   return (
     <span className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${cls}`}>
       <span className={`h-2 w-2 rounded-full ${dot}`} />
@@ -669,6 +777,7 @@ function Stat({ label, value }) {
 
 const TONE = {
   slate: 'bg-slate-100 text-slate-700 hover:bg-slate-200',
+  green: 'bg-green-50 text-green-700 hover:bg-green-100',
   amber: 'bg-amber-50 text-amber-800 hover:bg-amber-100',
   rose: 'bg-rose-50 text-rose-700 hover:bg-rose-100',
 }

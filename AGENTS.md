@@ -143,6 +143,7 @@ supabase/
 - บอร์ด (`esp32/noise_meter/main.py`, **MicroPython/Thonny**) เรียก `device_heartbeat()` ทุก 30 วิ -> ได้สถานะการจองของที่นั่งตอนนี้ (`booking.id/ends_in/...`)
   บอร์ด**นับเสียงดังเอง** (เกิน 65 dB สะสม 5 วิ = 1 ครั้ง, เงียบติดกัน**เกิน** 10 วิ = ล้าง ไม่นับ, ไฟ เขียว/เหลือง/แดง) แล้วเรียก `report_noise()` ตั้งแต่ครั้งที่ 3 ทุกครั้ง
   -> `cooldown_seconds` ฝั่งเว็บต้อง **ไม่เกิน 5** ไม่งั้นครั้งที่ 4+ จะได้ `COOLDOWN` / ปุ่ม "จำลองเสียงดัง" = `admin_simulate_noise()`
+- **ตัด/เชื่อมต่อเซนเซอร์** = `noise_devices.active` (ปุ่มในหน้าผู้ดูแล), **ย้ายโต๊ะ** = `admin_update_device(p_seat)` — บอร์ดรู้เองจาก `device_heartbeat` (active=false -> หยุดเฝ้า ไฟดับ จอ OFF / seat เปลี่ยน -> นับใหม่) ไม่ต้องแก้โค้ดหรือเปลี่ยนคีย์
 - โค้ดบอร์ด + วิธีต่อสายอยู่ที่ `esp32/`
 - WiFi + DEVICE_ID/KEY ตั้งใน "ส่วนที่ 1" ของ `main.py` — **ใน repo ต้องเป็น placeholder เสมอ (repo public ห้าม commit คีย์จริง)**; ไฟล์พร้อมอัปลงบอร์ดที่ใส่คีย์โต๊ะทดลองแล้ว เก็บนอก repo ที่ `C:\Users\S1rap0b\esp32-noise-board\main.py`
 - denoise บนบอร์ด (`Denoiser` ใน main.py): หักพลังงานเสียงพื้นหลังที่เรียนรู้เอง (สูงสุด 55 dB) + median 5 ช่วงตัดเสียงกระแทก — ทดสอบ logic ได้บนคอมโดยจำลองโมดูล MicroPython — เวลาในการจองเทียบกับ `now() at time zone 'Asia/Bangkok'`

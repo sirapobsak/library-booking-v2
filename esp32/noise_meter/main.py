@@ -345,6 +345,8 @@ def server_ready():
 
 
 last_wifi_try = None
+last_allowed = True   # ผู้ดูแลเชื่อมต่อเซนเซอร์นี้อยู่ไหม (ครั้งก่อน) — ใช้ดูว่าเพิ่งถูกตัด/เชื่อมต่อ
+last_seat = None      # โต๊ะที่ผูกอยู่ (ครั้งก่อน) — ใช้ดูว่าผู้ดูแลเพิ่งย้ายโต๊ะ
 
 
 def keep_wifi(now):
@@ -393,6 +395,7 @@ def call_rpc(fn, level):
 def apply_status(res, booking, counter, now):
     # อ่านคำตอบจาก device_heartbeat -> อัปเดตการจอง / ผู้ดูแลเปิด-ปิด / แต้มที่หัก
     # คืนค่า (เฝ้าเสียงได้ไหม, แต้มที่หักต่อครั้ง, ชื่อที่นั่ง, การจองเปลี่ยนไหม)
+    global last_allowed, last_seat
     allowed = bool(res.get("active", True)) and bool(res.get("sensor_enabled", True))
     penalty = int(res.get("penalty", 5))
     seat = res.get("seat") or "----"
@@ -400,6 +403,25 @@ def apply_status(res, booking, counter, now):
         print("!! เว็บยังไม่ส่งข้อมูลการจองมา — รัน supabase/points.sql เวอร์ชันล่าสุดอีกรอบ")
     b = res.get("booking")
     changed = False
+
+    # ผู้ดูแลกด "ตัดการเชื่อมต่อ" (หรือปิดการหักแต้มจากเซนเซอร์) -> หยุดเฝ้าเสียง ล้างการนับ ไฟดับ
+    if allowed != last_allowed:
+        print("ผู้ดูแลเชื่อมต่อเซนเซอร์นี้แล้ว — เริ่มเฝ้าเสียง" if allowed
+              else "ผู้ดูแลตัดการเชื่อมต่อเซนเซอร์นี้ — หยุดเฝ้าเสียง ไม่หักแต้ม (จอขึ้น OFF)")
+        last_allowed = allowed
+    if not allowed and (counter.strikes or counter.loud_ms):
+        counter.reset()
+        show_leds(0)
+        changed = True
+
+    # ผู้ดูแลกด "ย้ายโต๊ะ" -> เริ่มนับใหม่สำหรับโต๊ะใหม่ (ใช้คีย์เดิม ไม่ต้องแก้โค้ด)
+    if last_seat is not None and seat != last_seat:
+        print("ผู้ดูแลย้ายเซนเซอร์จากโต๊ะ %s ไปโต๊ะ %s — เริ่มนับใหม่" % (last_seat, seat))
+        counter.reset()
+        show_leds(0)
+        changed = True
+    last_seat = seat
+
     if not b:
         if booking.id is not None:
             print("การจองรอบนี้จบแล้ว (หมดเวลา/ถูกยกเลิก) — ไฟดับ เริ่มนับใหม่")
@@ -436,7 +458,7 @@ def db_to_x(db):
     return max(0, min(127, int((db - 30) * 128 / 70)))
 
 
-def draw(db, counter, booking, now, online, seat, penalty, note):
+def draw(db, counter, booking, now, online, seat, penalty, note, allowed=True):
     if oled is None:
         return
     oled.fill(0)
@@ -448,6 +470,8 @@ def draw(db, counter, booking, now, online, seat, penalty, note):
         status = "NO SETUP"
     elif not online:
         status = "NO WIFI"
+    elif not allowed:
+        status = "OFF"  # ผู้ดูแลตัดการเชื่อมต่อ
     elif booking.active(now):
         status = "%dm LEFT" % booking.minutes_left(now)
     else:
@@ -460,7 +484,8 @@ def draw(db, counter, booking, now, online, seat, penalty, note):
     oled.text("dB", 74, 28)
 
     # นับถอยหลัง 3-2-1 (กล่องสีขาว ตัวเลขสีดำ)
-    cd = counter.countdown() if booking.active(now) else None
+    watching = booking.active(now) and allowed
+    cd = counter.countdown() if watching else None
     if cd is not None:
         oled.fill_rect(96, 10, 32, 28, 1)
         big_text(str(cd), 100, 12, 3, 0)
@@ -475,7 +500,7 @@ def draw(db, counter, booking, now, online, seat, penalty, note):
     # แถวล่าง
     if note:
         oled.text(note, 0, 56)
-    elif booking.active(now):
+    elif watching:
         n = counter.strikes
         oled.text(("W %d/3" % n) if n <= 3 else ("W %d" % n), 0, 56)
         if cd is not None:
@@ -485,6 +510,8 @@ def draw(db, counter, booking, now, online, seat, penalty, note):
         else:
             right = ""
         oled.text(right, 128 - 8 * len(right), 56)
+    elif not allowed:
+        oled.text("DISCONNECTED", 0, 56)
     else:
         oled.text("LIMIT %d dB" % LIMIT_DB, 0, 56)
     oled.show()
@@ -612,7 +639,7 @@ def main():
                     last_report_try is None or time.ticks_diff(now, last_report_try) >= REPORT_RETRY_MS
                 ):
                     last_report_try = now
-                    draw(shown_db, counter, booking, now, online, seat, penalty, "SENDING...")
+                    draw(shown_db, counter, booking, now, online, seat, penalty, "SENDING...", allowed)
                     res = call_rpc("report_noise", db)
                     if res is not None:
                         pending -= 1
@@ -650,7 +677,7 @@ def main():
         if time.ticks_diff(now, last_draw) >= DRAW_MS:
             last_draw = now
             draw(shown_db, counter, booking, now, online, seat, penalty,
-                 note or ("CALIBRATING" if denoiser.calibrating() else ""))
+                 note or ("CALIBRATING" if denoiser.calibrating() else ""), allowed)
         if time.ticks_diff(now, last_print) >= PRINT_MS:
             last_print = now
             raw = " (ดิบ %.1f, พื้นหลัง %.1f)" % (raw_db, denoiser.floor) if DENOISE and denoiser.floor is not None else ""
