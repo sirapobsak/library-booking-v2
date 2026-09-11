@@ -19,9 +19,11 @@
 - หน้าเลือกโซน 3 โซน: `e-lecture`, `sofa`, `quiet`
 - โซนเงียบ: ผังที่นั่ง SVG 56 จุด — จองได้เฉพาะคนล็อกอิน เลือกเวลาเริ่ม–สิ้นสุด + จำนวนคน, ที่นั่งที่มีการจองยังไม่จบเป็นสีแดง
 - จองหลายคน -> QR + รหัส 6 หลัก, หน้า `/join` ให้เพื่อนเข้าร่วมด้วยบัญชีตัวเอง (ยังไม่ล็อกอิน -> ล็อกอินแล้วพากลับมาหน้าเดิม)
+- ระบบคะแนนสะสม + เซนเซอร์เสียง ESP32: ผู้ใช้เห็นแค่คะแนนตัวเอง (`/points`), ผู้ดูแล (`/admin`) เพิ่ม/ลด/ตั้งคะแนน ดูประวัติ ตั้งค่า จัดการอุปกรณ์
 - รัน `supabase/bookings.sql` บน Supabase แล้ว (2026-09-11) — การจองเก็บในฐานข้อมูลจริง ทุกเครื่องเห็นตรงกัน (localStorage เป็นแค่ fallback)
 
 ### ยังไม่ได้ทำ (งานถัดไป)
+- เจ้าของโปรเจกต์ต้องรัน `supabase/points.sql` + ตั้งผู้ดูแลคนแรก (บรรทัดท้ายไฟล์) — ก่อนรัน ป้ายคะแนน/หน้าผู้ดูแลจะขึ้นว่ายังไม่ได้ติดตั้ง
 - ผังที่นั่งของโซน E-Lecture กับโซนโซฟา
 - จองล่วงหน้าข้ามวัน (ตอนนี้จองได้แค่วันนี้)
 - หน้า "การจองของฉัน"
@@ -45,6 +47,7 @@
 ```bash
 npm install
 npm run dev      # http://localhost:5174/library-booking-v2/
+npm run dev:mock # http://localhost:5175/library-booking-v2/ — โหมดทดลอง ไม่ต่อ Supabase (ใช้ .env.mock) ทุกบัญชีเป็นผู้ดูแล
 npm run build    # ต้องผ่านก่อน push เสมอ
 npm run preview  # ดู production build
 ```
@@ -82,6 +85,7 @@ src/
 ├─ auth.jsx                    ⭐ ระบบสมาชิก: สมัคร / ล็อกอิน / ออกจากระบบ (dual-mode)
 ├─ supabase.js                 สร้าง client + ping/เช็ค network
 ├─ data.js                     ⭐ ข้อมูล 3 โซน (id, ชื่อ, คำอธิบาย, ไอคอน, สี)
+├─ points.js                   ⭐ คะแนนสะสม: useMyPoints() / usePointsAdmin() — Supabase RPC หรือ localStorage (โหมดทดลอง)
 ├─ bookings.js                 ⭐ ระบบจอง dual-mode: useBookingApi() / useZoneBookings(zoneId) — Supabase RPC หรือ localStorage
 ├─ layouts/
 │  ├─ quietZone.js             ⭐ พิกัดที่นั่งทุกจุดของโซนเงียบ (พิกัดพิกเซลบนรูปแปลน 1656x1242)
@@ -96,9 +100,12 @@ src/
    ├─ AuthPage.jsx             เข้าสู่ระบบ + ลงทะเบียน (ตรวจข้อมูลครบทุกช่อง)
    ├─ Zones.jsx                หน้าเลือกโซน (หน้าแรกหลังล็อกอิน)
    ├─ ZonePage.jsx             /zone/:zoneId — โซนเงียบโชว์ผัง โซนอื่นเป็น placeholder
-   └─ JoinPage.jsx             /join, /join/:code — เข้าร่วมโต๊ะด้วยรหัส (ลิงก์ใน QR ชี้มาที่นี่)
+   ├─ JoinPage.jsx             /join, /join/:code — เข้าร่วมโต๊ะด้วยรหัส (ลิงก์ใน QR ชี้มาที่นี่)
+   ├─ MyPoints.jsx             /points — ผู้ใช้เห็นแค่คะแนนสะสมของตัวเอง
+   └─ AdminPage.jsx            /admin — แท็บ ผู้ใช้&คะแนน / ประวัติ / อุปกรณ์เซนเซอร์ / ตั้งค่า
 supabase/
 ├─ schema.sql                  SQL สร้างตาราง profiles + trigger + get_email_by_phone
+├─ points.sql                  คะแนนสะสม + ผู้ดูแล + อุปกรณ์ ESP32 + RPC (รันหลัง bookings.sql)
 └─ bookings.sql                seat_bookings + seat_booking_members + RLS + RPC จอง/เข้าร่วม (รันหลัง schema.sql)
 ```
 
@@ -123,6 +130,16 @@ supabase/
 - ข้อความ error จาก SQL เป็น key ภาษาอังกฤษ (`OVERLAP`, `FULL`, ...) แล้ว `bookings.js` แปลเป็นไทยใน `ERR` — เพิ่ม key ใหม่ต้องแก้ทั้งสองฝั่ง
 - `MAX_PARTY` (10) ต้องตรงกันทั้งใน `bookings.js` และ check constraint/ฟังก์ชันใน `bookings.sql`
 - ลิงก์ใน QR = `joinUrl(code)` = `<origin><BASE_URL>#/join/<code>` — บน localhost QR จะชี้ localhost (มือถือเปิดไม่ได้) ทดสอบสแกนจริงบนเว็บที่ deploy แล้ว
+
+### ระบบคะแนนสะสม + เซนเซอร์เสียง (สำคัญ)
+- คะแนนอยู่ในตาราง `user_points` (แยกจาก `profiles`) — ผู้ใช้อ่านได้แค่ของตัวเอง **แก้ตรง ๆ ไม่ได้** เปลี่ยนได้ผ่านฟังก์ชัน SQL เท่านั้น
+  ทุกการเปลี่ยนคะแนนต้องผ่าน `_change_points()` (บันทึก `point_logs` ให้เอง, คะแนนไม่ติดลบ)
+- ผู้ดูแล = แถวในตาราง `admins` (คนแรกเพิ่มด้วย SQL ท้าย `points.sql`) ฟังก์ชัน `admin_*` ทุกตัวเรียก `_require_admin()` ก่อน
+- ESP32 1 ตัว = 1 ที่นั่ง (`noise_devices`) เรียก `report_noise(device, key, level)` ด้วย anon key + **คีย์อุปกรณ์** (เก็บเป็น bcrypt hash)
+  -> `_apply_noise()` หักแต้ม**ทุกคนในการจองที่นั่งนั้นที่กำลังนั่งอยู่ตอนนี้** (คนจอง + members) มีช่วงพัก `cooldown_seconds` ต่ออุปกรณ์
+- `device_heartbeat()` ทุก 1 นาที = สถานะออนไลน์ในหน้าผู้ดูแล / ปุ่ม "จำลองเสียงดัง" = `admin_simulate_noise()` (ทดสอบได้โดยไม่มีบอร์ด)
+- โค้ดบอร์ด + วิธีต่อสายอยู่ที่ `esp32/` — เวลาในการจองเทียบกับ `now() at time zone 'Asia/Bangkok'`
+- โหมดทดลอง (`npm run dev:mock`): `points.js` เลียนแบบฟังก์ชัน SQL ใน localStorage และทุกบัญชีเป็นผู้ดูแล — **ห้ามให้โหมดนี้ทำงานบนเว็บจริงที่มี Supabase**
 
 ### เพิ่มโซนใหม่ / เพิ่มผังให้โซนอื่น
 1. เพิ่ม object ใน `ZONES` ที่ `src/data.js` (ต้องมีสีใน `ACCENT` ด้วย — Tailwind ต้องเห็นชื่อคลาสเต็ม ๆ)
