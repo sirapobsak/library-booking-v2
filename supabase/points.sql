@@ -3,6 +3,9 @@
 --  วิธีใช้: Supabase Dashboard > SQL Editor > วางทั้งไฟล์ > Run  (รันซ้ำได้ปลอดภัย)
 --  ต้องรันหลัง schema.sql และ bookings.sql
 --
+--  ⚠️ ฐานข้อมูลนี้ใช้ร่วมกับเว็บเวอร์ชันแรก (v1) — v1 มี point_logs, reward_logs, profiles.points,
+--     adjust_points ฯลฯ อยู่แล้ว ของ v2 จึงใช้ชื่อ user_points / user_point_logs และห้ามแตะของ v1
+--
 --  หลักการ
 --   - ทุกคนเริ่มที่ starting_points (ผู้ดูแลตั้งค่าได้)
 --   - ESP32 1 ตัวผูกกับที่นั่ง 1 ที่ — ตรวจพบเสียงดัง -> หักแต้ม "ทุกคนในการจองที่นั่งนั้นตอนนี้"
@@ -43,7 +46,7 @@ create table if not exists public.user_points (
 );
 
 -- ประวัติการเปลี่ยนคะแนนทุกครั้ง
-create table if not exists public.point_logs (
+create table if not exists public.user_point_logs (
   id            bigint generated always as identity primary key,
   user_id       uuid not null references auth.users (id) on delete cascade,
   delta         int  not null,                 -- เปลี่ยนไปเท่าไร (ติดลบ = หัก)
@@ -55,8 +58,8 @@ create table if not exists public.point_logs (
   actor_id      uuid references auth.users (id) on delete set null,  -- ผู้ดูแลที่กด (ถ้ามี)
   created_at    timestamptz not null default now()
 );
-create index if not exists point_logs_user_idx    on public.point_logs (user_id, created_at desc);
-create index if not exists point_logs_created_idx on public.point_logs (created_at desc);
+create index if not exists user_point_logs_user_idx    on public.user_point_logs (user_id, created_at desc);
+create index if not exists user_point_logs_created_idx on public.user_point_logs (created_at desc);
 
 -- อุปกรณ์ ESP32 (1 ตัว = 1 ที่นั่ง)
 create table if not exists public.noise_devices (
@@ -78,7 +81,7 @@ create table if not exists public.noise_devices (
 alter table public.admins         enable row level security;
 alter table public.point_settings enable row level security;
 alter table public.user_points    enable row level security;
-alter table public.point_logs     enable row level security;
+alter table public.user_point_logs     enable row level security;
 alter table public.noise_devices  enable row level security;
 
 drop policy if exists "read own points" on public.user_points;
@@ -127,7 +130,7 @@ begin
   select up.points into v_old from public.user_points up where up.user_id = p_user for update;
   v_new := greatest(0, v_old + p_delta);  -- คะแนนไม่ติดลบ
   update public.user_points set points = v_new, updated_at = now() where user_id = p_user;
-  insert into public.point_logs (user_id, delta, balance_after, source, reason, device_id, seat_id, actor_id)
+  insert into public.user_point_logs (user_id, delta, balance_after, source, reason, device_id, seat_id, actor_id)
   values (p_user, v_new - v_old, v_new, p_source, coalesce(p_reason, ''), p_device, p_seat, p_actor);
   return v_new;
 end $$;
@@ -265,7 +268,7 @@ begin
            nullif(trim(coalesce(p.first_name, '') || ' ' || coalesce(p.last_name, '')), ''),
            u.email::text, l.delta, l.balance_after, l.source, l.reason, l.device_id, l.seat_id,
            nullif(trim(coalesce(ap.first_name, '') || ' ' || coalesce(ap.last_name, '')), '')
-    from public.point_logs l
+    from public.user_point_logs l
     left join auth.users u      on u.id = l.user_id
     left join public.profiles p  on p.id = l.user_id
     left join public.profiles ap on ap.id = l.actor_id

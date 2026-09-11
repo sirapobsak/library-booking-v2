@@ -36,7 +36,7 @@ const TABS = [
   { id: 'settings', label: 'ตั้งค่า', icon: Settings },
 ]
 
-// ที่มาของการเปลี่ยนคะแนน (ตรงกับคอลัมน์ source ใน point_logs)
+// ที่มาของการเปลี่ยนคะแนน (ตรงกับคอลัมน์ source ใน user_point_logs)
 const SOURCE = {
   sensor: { label: 'เซนเซอร์', cls: 'bg-amber-100 text-amber-800' },
   admin: { label: 'ผู้ดูแล', cls: 'bg-sky-100 text-sky-800' },

@@ -132,8 +132,11 @@ supabase/
 - ลิงก์ใน QR = `joinUrl(code)` = `<origin><BASE_URL>#/join/<code>` — บน localhost QR จะชี้ localhost (มือถือเปิดไม่ได้) ทดสอบสแกนจริงบนเว็บที่ deploy แล้ว
 
 ### ระบบคะแนนสะสม + เซนเซอร์เสียง (สำคัญ)
+- ⚠️ **Supabase project นี้ใช้ร่วมกับเว็บ v1** (`sirapobsak/library-booking`) — v1 มีตาราง `point_logs`, `reward_logs`, `bookings`, `tables`, `zones`,
+  คอลัมน์ `profiles.points/reward_points` และฟังก์ชัน `adjust_points`, `redeem_reward` ฯลฯ อยู่แล้ว
+  **ของ v2 ต้องตั้งชื่อไม่ซ้ำ** (`create table if not exists` จะข้ามตารางชื่อซ้ำเงียบ ๆ แล้วพังตอนใช้งาน) และห้ามแก้ของ v1
 - คะแนนอยู่ในตาราง `user_points` (แยกจาก `profiles`) — ผู้ใช้อ่านได้แค่ของตัวเอง **แก้ตรง ๆ ไม่ได้** เปลี่ยนได้ผ่านฟังก์ชัน SQL เท่านั้น
-  ทุกการเปลี่ยนคะแนนต้องผ่าน `_change_points()` (บันทึก `point_logs` ให้เอง, คะแนนไม่ติดลบ)
+  ทุกการเปลี่ยนคะแนนต้องผ่าน `_change_points()` (บันทึก `user_point_logs` ให้เอง, คะแนนไม่ติดลบ)
 - ผู้ดูแล = แถวในตาราง `admins` (คนแรกเพิ่มด้วย SQL ท้าย `points.sql`) ฟังก์ชัน `admin_*` ทุกตัวเรียก `_require_admin()` ก่อน
 - ESP32 1 ตัว = 1 ที่นั่ง (`noise_devices`) เรียก `report_noise(device, key, level)` ด้วย anon key + **คีย์อุปกรณ์** (เก็บเป็น bcrypt hash)
   -> `_apply_noise()` หักแต้ม**ทุกคนในการจองที่นั่งนั้นที่กำลังนั่งอยู่ตอนนี้** (คนจอง + members) มีช่วงพัก `cooldown_seconds` ต่ออุปกรณ์
