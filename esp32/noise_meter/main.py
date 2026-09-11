@@ -11,6 +11,7 @@
 #   4. ครั้งที่ 1 ไฟเขียว / ครั้งที่ 2 ไฟเหลือง / ครั้งที่ 3 ไฟแดง (แดงค้างจนหมดเวลาจอง)
 #   5. ตั้งแต่ครั้งที่ 3 เป็นต้นไป ทุกครั้งส่งไปเว็บให้หักคะแนน (ครั้งละ 5 แต้ม ตั้งค่าได้ในหน้าผู้ดูแล)
 #   6. หมดเวลาจอง -> ไฟดับ นับใหม่จาก 0 สำหรับการจองรอบถัดไป
+#   * จับเฉพาะเสียงคนพูด: กรองช่วงความถี่เสียงพูด + ดูจังหวะพยางค์ (พัดลม เครื่องจักร เสียงบี๊บ ไม่นับ)
 #   * ลดเสียงรบกวน (denoise): หักเสียงพื้นหลังของห้อง + ตัดเสียงกระแทกสั้น ๆ ก่อนตัดสินว่าดัง
 #
 #  ไฟล์บนบอร์ด: main.py (ไฟล์นี้) + lib/ssd1306.py (ไลบรารีจอ)
@@ -20,6 +21,7 @@ import gc
 import json
 import math
 import time
+from array import array
 
 import framebuf
 import micropython
@@ -65,6 +67,14 @@ FLOOR_MAX_DB = 55          # เสียงพื้นหลังที่ย
 MEDIAN_WINDOWS = 5         # ตัดเสียงกระแทกสั้นกว่า ~0.3 วิ (ใช้ค่ากลางของ 5 ช่วงล่าสุด = 0.625 วิ)
 DB_MIN = 30                # ค่าต่ำสุดที่แสดง (เงียบมาก)
 
+# ---------- จับเฉพาะเสียงคนพูด ----------
+VOICE_ONLY = True          # True = นับเฉพาะเสียงคนพูด (พัดลม เครื่องจักร เสียงบี๊บ ไม่นับ) / False = นับทุกเสียง
+SPEECH_LOW_HZ = 250        # ช่วงความถี่เสียงพูด ต่ำสุด — ตัดเสียงหึ่งของแอร์ พัดลม ไฟฟ้า
+SPEECH_HIGH_HZ = 3400      # ช่วงความถี่เสียงพูด สูงสุด — ตัดเสียงซ่า เสียงแหลม
+SPEECH_RATIO_MIN = 0.35    # พลังงานเสียงต้องอยู่ในช่วงเสียงพูดอย่างน้อยกี่ส่วน (0–1)
+SPEECH_MOD_DB = 4.0        # เสียงต้องขึ้น-ลงเป็นพยางค์อย่างน้อยกี่ dB (เสียงคงที่อย่างพัดลม ~1 dB)
+MOD_CHUNKS = 31            # ดูจังหวะขึ้น-ลงย้อนหลังกี่ก้อน (~1 วินาที)
+
 # ---------- โหมดทดสอบ ----------
 # True = ทดสอบวงจรโดยไม่ต่อเว็บ: ถือว่ามีคนจองอยู่ตลอด, ไม่หักคะแนนจริง, กดปุ่ม BOOT = เริ่มรอบใหม่
 TEST_MODE = False
@@ -86,7 +96,6 @@ PIN_BOOT = 0           # ปุ่ม BOOT บนบอร์ด (ไม่ต�
 SAMPLE_RATE = 16000          # อ่านเสียง 16,000 ครั้งต่อวินาที
 MIC_SENSITIVITY_DBFS = -26   # INMP441: เสียง 94 dB อ่านได้ -26 dBFS (จาก datasheet ของไมค์)
 CHUNK_SAMPLES = 512          # อ่านทีละ 512 ค่า (~0.03 วินาที)
-STEP = 4                     # คำนวณจากทุก ๆ 4 ค่า ประหยัดแรงบอร์ด ความดังที่ได้แทบไม่ต่าง
 WINDOW_MS = 125              # สรุปค่า dB ทุก 1/8 วินาที
 DRAW_MS = 200                # วาดจอใหม่ทุก 0.2 วินาที
 PRINT_MS = 1000              # พิมพ์ค่าลง Shell ของ Thonny ทุก 1 วินาที
@@ -98,38 +107,127 @@ NOTE_MS = 2500               # ข้อความแจ้งเตือน�
 
 
 # ============================================================
-#  ส่วนที่ 3 — คำนวณความดังเสียง + ลดเสียงรบกวน
+#  ส่วนที่ 3 — คำนวณความดังเสียง + จับเฉพาะเสียงคนพูด + ลดเสียงรบกวน
 # ============================================================
-@micropython.native
-def chunk_rms(buf, count, step):
-    # ค่า RMS (ความแรงเฉลี่ย) ของเสียงช่วงสั้น ๆ นี้
-    # ไมค์ส่งมาค่าละ 4 ไบต์ ข้อมูลเสียงจริง 24 บิตอยู่ในไบต์ที่ 2–4
-    # ลบค่าเฉลี่ย (DC) ของไมค์ออกก่อน = denoise ชั้นแรก (ร่วมกับตัวกรองความถี่ต่ำ ~60 Hz ในตัวไมค์)
-    n = 0
-    total = 0.0
+def biquad_q12(kind, fc, fs):
+    # ออกแบบตัวกรอง 2nd-order (Butterworth) แล้วแปลงค่าเป็นจำนวนเต็ม (คูณ 4096) ให้ viper ใช้
+    #   kind = "hp" (ผ่านสูง) หรือ "lp" (ผ่านต่ำ), fc = ความถี่ตัด, fs = อัตราสุ่ม
+    w0 = 2 * math.pi * fc / fs
+    cw = math.cos(w0)
+    alpha = math.sin(w0) / (2 * 0.7071)
+    if kind == "hp":
+        b0, b1 = (1 + cw) / 2, -(1 + cw)
+    else:
+        b0, b1 = (1 - cw) / 2, 1 - cw
+    a0, a1, a2 = 1 + alpha, -2 * cw, 1 - alpha
+    return [int(round(v / a0 * 4096)) for v in (b0, b1, b0, a1, a2)]
+
+
+@micropython.viper
+def speech_filter(buf, nbytes: int, sums, st, co) -> int:
+    # กรองเสียงให้เหลือช่วงเสียงพูด แล้วเก็บพลังงาน (viper = แปลงเป็นโค้ดเครื่อง เร็วพอทำทุกค่า)
+    #  1) รวม 2 ค่าติดกันเป็น 1 (16 kHz -> 8 kHz พอสำหรับเสียงพูด) + ย่อเหลือ 16 บิต
+    #  2) ตัดค่า DC  3) กรองผ่านสูง (ตัดเสียงหึ่ง)  4) กรองผ่านต่ำ (ตัดเสียงซ่า)
+    #  ทุกขั้น "เก็บเศษ" ที่หายไปตอน >>12 ไว้บวกรอบถัดไป — ถ้าตัดทิ้งเฉย ๆ ตัวกรองจะเพี้ยนจนเสียงดังเกินจริง
+    #  หรือสั่นค้างเองตอนห้องเงียบ
+    #  ผลรวมกำลังสองทุก 8 ค่า: sums[0..31] = เฉพาะช่วงเสียงพูด, sums[32..63] = ทั้งหมด, sums[64] = ค่าที่ไม่ใช่ 0
+    #  ตัวเลขทุกตัวไม่เกินขนาด int 32 บิต แม้เสียงดังสุดที่ไมค์รับได้ (ชุดทดสอบมีเคสนี้)
+    b = ptr8(buf)
+    out = ptr32(sums)
+    s = ptr32(st)
+    c = ptr32(co)
+    hb0 = c[0]
+    hb1 = c[1]
+    hb2 = c[2]
+    ha1 = c[3]
+    ha2 = c[4]
+    lb0 = c[5]
+    lb1 = c[6]
+    lb2 = c[7]
+    la1 = c[8]
+    la2 = c[9]
+    dx1 = s[0]
+    dy1 = s[1]
+    hx1 = s[2]
+    hx2 = s[3]
+    hy1 = s[4]
+    hy2 = s[5]
+    lx1 = s[6]
+    lx2 = s[7]
+    ly1 = s[8]
+    ly2 = s[9]
+    de = s[10]
+    he = s[11]
+    le = s[12]
+    band = 0
+    total = 0
+    cnt = 0
+    blk = 0
+    nz = 0
     i = 0
-    while i < count:
-        b = i * 4
-        v = buf[b + 1] | (buf[b + 2] << 8) | (buf[b + 3] << 16)
-        if v & 0x800000:
-            v -= 0x1000000
-        total += v
-        n += 1
-        i += step
-    if n == 0:
-        return 0.0
-    mean = total / n
-    acc = 0.0
-    i = 0
-    while i < count:
-        b = i * 4
-        v = buf[b + 1] | (buf[b + 2] << 8) | (buf[b + 3] << 16)
-        if v & 0x800000:
-            v -= 0x1000000
-        d = v - mean
-        acc += d * d
-        i += step
-    return math.sqrt(acc / n)
+    while i + 8 <= nbytes:
+        # ไมค์ส่งมาค่าละ 4 ไบต์ ข้อมูลเสียงจริง 24 บิตอยู่ในไบต์ที่ 2–4
+        v0 = b[i + 1] | (b[i + 2] << 8) | (b[i + 3] << 16)
+        if v0 & 0x800000:
+            v0 -= 0x1000000
+        v1 = b[i + 5] | (b[i + 6] << 8) | (b[i + 7] << 16)
+        if v1 & 0x800000:
+            v1 -= 0x1000000
+        if (v0 | v1) != 0:
+            nz += 1
+        x = (v0 + v1) >> 9
+        acc = 4076 * dy1 + de
+        q = acc >> 12
+        de = acc - (q << 12)  # เศษที่เหลือ (0–4095) เก็บไว้บวกรอบหน้า
+        d = x - dx1 + q  # ตัด DC
+        dx1 = x
+        dy1 = d
+        acc = hb0 * d + hb1 * hx1 + hb2 * hx2 - ha1 * hy1 - ha2 * hy2 + he
+        h = acc >> 12  # ผ่านสูง
+        he = acc - (h << 12)
+        hx2 = hx1
+        hx1 = d
+        hy2 = hy1
+        hy1 = h
+        acc = lb0 * h + lb1 * lx1 + lb2 * lx2 - la1 * ly1 - la2 * ly2 + le
+        y = acc >> 12  # ผ่านต่ำ
+        le = acc - (y << 12)
+        lx2 = lx1
+        lx1 = h
+        ly2 = ly1
+        ly1 = y
+        yq = (y + 2) >> 2  # ย่อก่อนยกกำลังสอง ไม่ให้เกิน int 32 บิต
+        dq = (d + 2) >> 2
+        band += yq * yq
+        total += dq * dq
+        cnt += 1
+        if cnt == 8:
+            out[blk] = band
+            out[32 + blk] = total
+            blk += 1
+            band = 0
+            total = 0
+            cnt = 0
+        i += 8
+    if cnt > 0 and blk < 32:
+        out[blk] = band
+        out[32 + blk] = total
+        blk += 1
+    out[64] = nz
+    s[0] = dx1
+    s[1] = dy1
+    s[2] = hx1
+    s[3] = hx2
+    s[4] = hy1
+    s[5] = hy2
+    s[6] = lx1
+    s[7] = lx2
+    s[8] = ly1
+    s[9] = ly2
+    s[10] = de
+    s[11] = he
+    s[12] = le
+    return blk
 
 
 def to_db(rms):
@@ -193,6 +291,73 @@ class Denoiser:
         if len(self.history) > MEDIAN_WINDOWS:
             self.history.pop(0)
         return median(self.history)
+
+
+def level_db(mean_square):
+    # พลังงานเฉลี่ย (หน่วยของตัวกรอง) -> dB  (1 หน่วย = 1024 ของสัญญาณ 24 บิต)
+    if mean_square <= 0:
+        return 0.0
+    return to_db(math.sqrt(mean_square) * 1024)
+
+
+def stdev(values):
+    n = len(values)
+    if n < 2:
+        return 0.0
+    mean = sum(values) / n
+    return math.sqrt(sum((v - mean) ** 2 for v in values) / n)
+
+
+class VoiceMeter:
+    # จับเฉพาะเสียงคนพูด
+    #  - วัดความดังเฉพาะช่วงความถี่เสียงพูด (SPEECH_LOW_HZ–SPEECH_HIGH_HZ)
+    #  - "เป็นเสียงคน" = พลังงานส่วนใหญ่อยู่ในช่วงเสียงพูด และขึ้น-ลงเป็นจังหวะพยางค์
+    #    (พัดลม เสียงซ่า เสียงบี๊บ ดังเท่ากันตลอด / เสียงหึ่งเครื่องจักรอยู่นอกช่วง -> ไม่ใช่เสียงคน)
+    FS = SAMPLE_RATE // 2  # หลังรวม 2 ค่าเป็น 1 เหลือ 8 kHz
+
+    def __init__(self):
+        self.coef = array("i", biquad_q12("hp", SPEECH_LOW_HZ, self.FS) + biquad_q12("lp", SPEECH_HIGH_HZ, self.FS))
+        self.state = array("i", [0] * 13)
+        self.sums = array("i", [0] * 65)
+        self.levels = []  # ความดังช่วงเสียงพูดของแต่ละก้อน (~32 ms) ย้อนหลัง ~1 วินาที
+        self.discard()
+
+    def discard(self):
+        # ทิ้งค่าที่สะสมไว้ (ใช้หลังบอร์ดติดคุยกับเว็บ)
+        self.band = 0.0
+        self.total = 0.0
+        self.n = 0
+
+    def feed(self, buf, nbytes):
+        # ใส่เสียงจากไมค์ 1 ก้อน -> คืนจำนวนค่าที่ไม่ใช่ 0 (0 = ไมค์ไม่ส่งเสียงมา)
+        blocks = speech_filter(buf, nbytes, self.sums, self.state, self.coef)
+        sm = self.sums
+        band = 0.0
+        total = 0.0
+        for k in range(blocks):
+            band += sm[k]
+            total += sm[32 + k]
+        pairs = nbytes // 8
+        if pairs:
+            self.band += band
+            self.total += total
+            self.n += pairs
+            self.levels.append(max(level_db(band / pairs), DB_MIN))
+            if len(self.levels) > MOD_CHUNKS:
+                self.levels.pop(0)
+        return sm[64]
+
+    def window(self):
+        # สรุปทุก 1/8 วินาที -> (dB ช่วงเสียงพูด, dB ทั้งหมด, สัดส่วนในช่วงเสียงพูด, จังหวะขึ้น-ลง dB, เป็นเสียงคนไหม)
+        if self.n == 0:
+            return 0.0, 0.0, 0.0, 0.0, False
+        band_db = level_db(self.band / self.n)
+        total_db = level_db(self.total / self.n)
+        ratio = self.band / self.total if self.total > 0 else 0.0
+        modu = stdev(self.levels)
+        self.discard()
+        voice = ratio >= SPEECH_RATIO_MIN and modu >= SPEECH_MOD_DB
+        return band_db, total_db, ratio, modu, voice
 
 
 # ============================================================
@@ -458,7 +623,7 @@ def db_to_x(db):
     return max(0, min(127, int((db - 30) * 128 / 70)))
 
 
-def draw(db, counter, booking, now, online, seat, penalty, note, allowed=True):
+def draw(db, counter, booking, now, online, seat, penalty, note, allowed=True, voice=False):
     if oled is None:
         return
     oled.fill(0)
@@ -489,6 +654,8 @@ def draw(db, counter, booking, now, online, seat, penalty, note, allowed=True):
     if cd is not None:
         oled.fill_rect(96, 10, 32, 28, 1)
         big_text(str(cd), 100, 12, 3, 0)
+    elif voice:
+        oled.text("TALK", 74, 14)  # ตรวจพบเสียงคนพูด
 
     # แถบระดับเสียง + ขีดเกณฑ์ 65 dB
     oled.rect(0, 42, 128, 8, 1)
@@ -525,6 +692,7 @@ def main():
     counter = NoiseCounter()
     booking = Booking()
     denoiser = Denoiser()
+    meter = VoiceMeter()     # กรองช่วงเสียงพูด + ตรวจว่าเป็นเสียงคนไหม
     allowed = True           # ผู้ดูแลเปิดอุปกรณ์ + การหักแต้มอยู่ไหม
     penalty = 5              # แต้มที่หักต่อครั้ง (อัปเดตจากเว็บ)
     seat = "TEST" if TEST_MODE else "----"
@@ -539,9 +707,11 @@ def main():
 
     start = time.ticks_ms()
     win_start = start
-    power = 0.0
     chunks = 0
     raw_db = 0.0
+    voice = False            # ตอนนี้เป็นเสียงคนพูดไหม
+    ratio = 0.0
+    modu = 0.0
     db = 0.0
     shown_db = 0.0
     last_draw = start
@@ -554,19 +724,20 @@ def main():
     print("เริ่มเฝ้าเสียง — เกณฑ์ %d dB, ดังสะสม %d วิ = 1 ครั้ง" % (LIMIT_DB, LOUD_SECONDS))
     if DENOISE:
         print("ลดเสียงรบกวน: เปิด — %d วิแรกขอให้เงียบ บอร์ดกำลังฟังเสียงพื้นหลังของห้อง" % CALIBRATE_SECONDS)
+    if VOICE_ONLY:
+        print("นับเฉพาะเสียงคนพูด: เปิด (ช่วง %d–%d Hz)" % (SPEECH_LOW_HZ, SPEECH_HIGH_HZ))
     if not TEST_MODE and not server_ready():
         print("!! ยังไม่ได้ตั้งค่า WiFi/เว็บ (ส่วนที่ 1 ด้านบน) — จะแสดงแค่ค่า dB หรือเปิด TEST_MODE = True เพื่อทดสอบ")
 
     while True:
         # ---------- อ่านเสียงจากไมค์ ----------
         nbytes = mic.readinto(samples)
-        rms = chunk_rms(samples, nbytes // 4, STEP)
-        power += rms * rms
+        nonzero = meter.feed(samples, nbytes)  # กรองช่วงเสียงพูด + เก็บพลังงานเสียง
         chunks += 1
         now = time.ticks_ms()
 
         # เช็คว่าไมค์ส่งเสียงมาจริงไหม (ค่า 0 ตลอด = ต่อสายผิด)
-        if rms < 1:
+        if nonzero == 0:
             if silent_since is None:
                 silent_since = now
             elif not mic_warned and time.ticks_diff(now, silent_since) > 3000:
@@ -575,11 +746,11 @@ def main():
         else:
             silent_since = None
 
-        # ---------- ทุก 1/8 วินาที: สรุป dB -> ลดเสียงรบกวน -> นับเสียงดัง ----------
+        # ---------- ทุก 1/8 วินาที: สรุป dB -> ตรวจเสียงคน -> ลดเสียงรบกวน -> นับเสียงดัง ----------
         elapsed = time.ticks_diff(now, win_start)
         if elapsed >= WINDOW_MS and chunks:
-            raw_db = to_db(math.sqrt(power / chunks))
-            power = 0.0
+            band_db, total_db, ratio, modu, voice = meter.window()
+            raw_db = band_db if VOICE_ONLY else total_db  # ความดังเฉพาะช่วงเสียงพูด / ทุกความถี่
             chunks = 0
             win_start = now
             dt = min(elapsed, WINDOW_MS * 2)  # ช่วงที่บอร์ดติดคุยกับเว็บ ไม่นับเป็นเวลาดัง/เงียบ
@@ -599,7 +770,9 @@ def main():
                     booking.start_test(now)
 
             if booking.active(now) and allowed and warm and not denoiser.calibrating():
-                if counter.update(db, dt):
+                # นับเฉพาะเสียงคนพูด: เสียงอื่น (พัดลม เครื่องจักร เสียงบี๊บ) ถือว่าเงียบ
+                loud_db = db if (voice or not VOICE_ONLY) else DB_MIN
+                if counter.update(loud_db, dt):
                     n = counter.strikes
                     show_leds(n)
                     if n >= DEDUCT_FROM_STRIKE:
@@ -639,7 +812,7 @@ def main():
                     last_report_try is None or time.ticks_diff(now, last_report_try) >= REPORT_RETRY_MS
                 ):
                     last_report_try = now
-                    draw(shown_db, counter, booking, now, online, seat, penalty, "SENDING...", allowed)
+                    draw(shown_db, counter, booking, now, online, seat, penalty, "SENDING...", allowed, voice)
                     res = call_rpc("report_noise", db)
                     if res is not None:
                         pending -= 1
@@ -651,7 +824,7 @@ def main():
                         elif status == "COOLDOWN":
                             print("!! เว็บยังอยู่ในช่วงพัก — ตั้ง 'ช่วงพักหลังหักแต้ม' ในหน้าผู้ดูแลเป็น 5 วินาที")
                     win_start = time.ticks_ms()  # ข้ามช่วงที่ติดส่งข้อมูล
-                    power = 0.0
+                    meter.discard()
                     chunks = 0
 
                 # 2) ถามสถานะการจองทุก 30 วินาที
@@ -668,7 +841,7 @@ def main():
                         if changed:
                             pending = 0
                     win_start = time.ticks_ms()
-                    power = 0.0
+                    meter.discard()
                     chunks = 0
 
         # ---------- จอ + Shell ----------
@@ -677,10 +850,12 @@ def main():
         if time.ticks_diff(now, last_draw) >= DRAW_MS:
             last_draw = now
             draw(shown_db, counter, booking, now, online, seat, penalty,
-                 note or ("CALIBRATING" if denoiser.calibrating() else ""), allowed)
+                 note or ("CALIBRATING" if denoiser.calibrating() else ""), allowed, voice)
         if time.ticks_diff(now, last_print) >= PRINT_MS:
             last_print = now
             raw = " (ดิบ %.1f, พื้นหลัง %.1f)" % (raw_db, denoiser.floor) if DENOISE and denoiser.floor is not None else ""
+            if VOICE_ONLY:
+                raw += " | %s (ช่วงพูด %d%%, จังหวะ %.1f dB)" % ("เสียงคน" if voice else "ไม่ใช่เสียงคน", int(ratio * 100), modu)
             if booking.active(now):
                 print(
                     "dB %.1f%s | ดังสะสม %.1f วิ | ครั้งที่ %d | จอง %s–%s เหลือ %d นาที"

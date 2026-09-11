@@ -147,6 +147,7 @@ supabase/
 - โค้ดบอร์ด + วิธีต่อสายอยู่ที่ `esp32/`
 - WiFi + DEVICE_ID/KEY ตั้งใน "ส่วนที่ 1" ของ `main.py` — **ใน repo ต้องเป็น placeholder เสมอ (repo public ห้าม commit คีย์จริง)**; ไฟล์พร้อมอัปลงบอร์ดที่ใส่คีย์โต๊ะทดลองแล้ว เก็บนอก repo ที่ `C:\Users\S1rap0b\esp32-noise-board\main.py`
 - denoise บนบอร์ด (`Denoiser` ใน main.py): หักพลังงานเสียงพื้นหลังที่เรียนรู้เอง (สูงสุด 55 dB) + median 5 ช่วงตัดเสียงกระแทก — ทดสอบ logic ได้บนคอมโดยจำลองโมดูล MicroPython — เวลาในการจองเทียบกับ `now() at time zone 'Asia/Bangkok'`
+- **จับเฉพาะเสียงคน** (`VOICE_ONLY`): `speech_filter` (viper, fixed-point Q12: รวม 2 ค่า -> 8 kHz 16 บิต, เก็บเศษจาก >>12 ไว้บวกรอบหน้า (error feedback) กันเพี้ยน/สั่นค้างตอนเงียบ, ตัด DC, HPF 250 Hz + LPF 3400 Hz) + `VoiceMeter` (ในช่วงเสียงพูด ≥ 35% และจังหวะขึ้น-ลง ≥ 4 dB) — **แก้สเกลตัวเลขใน viper ต้องเช็ค overflow int 32 บิต** (ชุดทดสอบมีเคสเสียงเกือบเต็มสเกล)
 - โหมดทดลอง (`npm run dev:mock`): `points.js` เลียนแบบฟังก์ชัน SQL ใน localStorage และทุกบัญชีเป็นผู้ดูแล — **ห้ามให้โหมดนี้ทำงานบนเว็บจริงที่มี Supabase**
 
 ### เพิ่มโซนใหม่ / เพิ่มผังให้โซนอื่น
