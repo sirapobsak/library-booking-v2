@@ -716,7 +716,7 @@ function KeyModal({ info, onClose }) {
         </p>
         <div>
           <p className="mb-1.5 text-sm text-slate-600">
-            วาง 4 บรรทัดนี้ในไฟล์ <code>config.py</code> บนบอร์ด (คู่กับ main.py — ดู esp32/README.md)
+            วาง 4 บรรทัดนี้ทับของเดิมใน “ส่วนที่ 1 — ตั้งค่า” ของ <code>esp32/noise_meter/main.py</code> (ไฟล์ที่ใส่คีย์แล้วห้ามอัปขึ้น GitHub)
           </p>
           <pre className="overflow-x-auto rounded-xl bg-slate-900 p-4 text-xs leading-relaxed text-slate-100">{snippet}</pre>
         </div>

@@ -37,6 +37,9 @@ create table if not exists public.point_settings (
   updated_at       timestamptz not null default now()
 );
 insert into public.point_settings (id) values (1) on conflict (id) do nothing;
+-- ติดตั้งครั้งแรกเคยตั้งช่วงพักไว้ 60 วิ ซึ่งยาวกว่ารอบนับ 5 วิของบอร์ด (ครั้งที่ 4, 5 จะไม่ถูกหัก)
+-- -> ถ้ายังเป็นค่าเดิม 60 ปรับเป็น 5 ให้เอง (ถ้าผู้ดูแลตั้งค่าอื่นไว้แล้ว จะไม่แตะ)
+update public.point_settings set cooldown_seconds = 5 where id = 1 and cooldown_seconds = 60;
 
 -- คะแนนปัจจุบันของแต่ละคน (แยกจาก profiles เพื่อให้ผู้ใช้แก้คะแนนตัวเองไม่ได้)
 create table if not exists public.user_points (

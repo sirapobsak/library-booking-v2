@@ -141,10 +141,10 @@ supabase/
 - ESP32 1 ตัว = 1 ที่นั่ง (`noise_devices`) เรียก `report_noise(device, key, level)` ด้วย anon key + **คีย์อุปกรณ์** (เก็บเป็น bcrypt hash)
   -> `_apply_noise()` หักแต้ม**ทุกคนในการจองที่นั่งนั้นที่กำลังนั่งอยู่ตอนนี้** (คนจอง + members) มีช่วงพัก `cooldown_seconds` ต่ออุปกรณ์
 - บอร์ด (`esp32/noise_meter/main.py`, **MicroPython/Thonny**) เรียก `device_heartbeat()` ทุก 30 วิ -> ได้สถานะการจองของที่นั่งตอนนี้ (`booking.id/ends_in/...`)
-  บอร์ด**นับเสียงดังเอง** (เกิน 65 dB สะสม 5 วิ = 1 ครั้ง, เงียบติดกัน 10 วิ = ล้าง, ไฟ เขียว/เหลือง/แดง) แล้วเรียก `report_noise()` ตั้งแต่ครั้งที่ 3 ทุกครั้ง
+  บอร์ด**นับเสียงดังเอง** (เกิน 65 dB สะสม 5 วิ = 1 ครั้ง, เงียบติดกัน**เกิน** 10 วิ = ล้าง ไม่นับ, ไฟ เขียว/เหลือง/แดง) แล้วเรียก `report_noise()` ตั้งแต่ครั้งที่ 3 ทุกครั้ง
   -> `cooldown_seconds` ฝั่งเว็บต้อง **ไม่เกิน 5** ไม่งั้นครั้งที่ 4+ จะได้ `COOLDOWN` / ปุ่ม "จำลองเสียงดัง" = `admin_simulate_noise()`
 - โค้ดบอร์ด + วิธีต่อสายอยู่ที่ `esp32/`
-- บอร์ดอ่าน WiFi + DEVICE_ID/KEY จาก `esp32/noise_meter/config.py` (**อยู่ใน .gitignore — repo เป็น public ห้าม commit**) ตัวอย่างใน `config.example.py`
+- WiFi + DEVICE_ID/KEY ตั้งใน "ส่วนที่ 1" ของ `main.py` — **ใน repo ต้องเป็น placeholder เสมอ (repo public ห้าม commit คีย์จริง)**; ไฟล์พร้อมอัปลงบอร์ดที่ใส่คีย์โต๊ะทดลองแล้ว เก็บนอก repo ที่ `C:\Users\S1rap0b\esp32-noise-board\main.py`
 - denoise บนบอร์ด (`Denoiser` ใน main.py): หักพลังงานเสียงพื้นหลังที่เรียนรู้เอง (สูงสุด 55 dB) + median 5 ช่วงตัดเสียงกระแทก — ทดสอบ logic ได้บนคอมโดยจำลองโมดูล MicroPython — เวลาในการจองเทียบกับ `now() at time zone 'Asia/Bangkok'`
 - โหมดทดลอง (`npm run dev:mock`): `points.js` เลียนแบบฟังก์ชัน SQL ใน localStorage และทุกบัญชีเป็นผู้ดูแล — **ห้ามให้โหมดนี้ทำงานบนเว็บจริงที่มี Supabase**
 
