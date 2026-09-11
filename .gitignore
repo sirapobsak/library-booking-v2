@@ -4,3 +4,4 @@ dist
 .env.local
 __pycache__/
 *.pyc
+esp32/noise_meter/config.py

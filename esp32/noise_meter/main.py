@@ -11,9 +11,10 @@
 #   4. ครั้งที่ 1 ไฟเขียว / ครั้งที่ 2 ไฟเหลือง / ครั้งที่ 3 ไฟแดง (แดงค้างจนหมดเวลาจอง)
 #   5. ตั้งแต่ครั้งที่ 3 เป็นต้นไป ทุกครั้งส่งไปเว็บให้หักคะแนน (ครั้งละ 5 แต้ม ตั้งค่าได้ในหน้าผู้ดูแล)
 #   6. หมดเวลาจอง -> ไฟดับ นับใหม่จาก 0 สำหรับการจองรอบถัดไป
+#   * ลดเสียงรบกวน (denoise): หักเสียงพื้นหลังของห้อง + ตัดเสียงกระแทกสั้น ๆ ก่อนตัดสินว่าดัง
 #
+#  ไฟล์บนบอร์ด: main.py (ไฟล์นี้) + config.py (WiFi/คีย์อุปกรณ์) + lib/ssd1306.py (ไลบรารีจอ)
 #  ต่อสาย (ขาฝั่งขวาของบอร์ด) และวิธีติดตั้ง: ดู esp32/README.md
-#  ต้องมีไฟล์ ssd1306.py บนบอร์ด: Thonny > Tools > Manage packages > ค้น "ssd1306" > Install
 # ============================================================
 import gc
 import json
@@ -37,14 +38,12 @@ except ImportError:
 
 
 # ============================================================
-#  ส่วนที่ 1 — ตั้งค่า (ปกติแก้แค่ส่วนนี้)
+#  ส่วนที่ 1 — ตั้งค่า
 # ============================================================
 
-# ---------- WiFi (ESP32 ใช้ได้แค่ WiFi 2.4 GHz) ----------
+# ---------- WiFi + เว็บ (แนะนำให้ใส่ในไฟล์ config.py แทน — ดูท้ายส่วนนี้) ----------
 WIFI_SSID = "ชื่อWiFi"
 WIFI_PASS = "รหัสWiFi"
-
-# ---------- เว็บ: คัดลอก 4 บรรทัดจากหน้าผู้ดูแล > อุปกรณ์เซนเซอร์ > เพิ่มอุปกรณ์ ----------
 SUPABASE_URL = "https://xxxx.supabase.co"
 SUPABASE_ANON_KEY = "sb_publishable_xxxx"
 DEVICE_ID = "ESP-XXXXXX"
@@ -58,9 +57,24 @@ COUNTDOWN_SECONDS = 3      # แสดงนับถอยหลังบนจ
 DEDUCT_FROM_STRIKE = 3     # ตั้งแต่ครั้งที่เท่าไรเป็นต้นไปถึงส่งไปหักคะแนน
 DB_OFFSET = 0.0            # ปรับให้ตรงกับแอปวัดเสียงในมือถือ (จออ่านต่ำไป 4 dB -> ใส่ 4)
 
+# ---------- ลดเสียงรบกวน (denoise) ----------
+DENOISE = True             # True = หักเสียงพื้นหลัง + ตัดเสียงกระแทกสั้น ๆ / False = ใช้ค่าดิบจากไมค์
+CALIBRATE_SECONDS = 3      # หลังเปิดเครื่อง ฟังเสียงพื้นหลังของห้องกี่วินาที (ช่วงนี้ขอให้เงียบ)
+FLOOR_MAX_DB = 55          # เสียงพื้นหลังที่ยอมหักออกได้สูงสุด (กันเปิดเครื่องตอนคนคุยแล้วหักเยอะเกิน)
+MEDIAN_WINDOWS = 5         # ตัดเสียงกระแทกสั้นกว่า ~0.3 วิ (ใช้ค่ากลางของ 5 ช่วงล่าสุด = 0.625 วิ)
+DB_MIN = 30                # ค่าต่ำสุดที่แสดง (เงียบมาก)
+
 # ---------- โหมดทดสอบ ----------
 # True = ทดสอบวงจรโดยไม่ต่อเว็บ: ถือว่ามีคนจองอยู่ตลอด, ไม่หักคะแนนจริง, กดปุ่ม BOOT = เริ่มรอบใหม่
 TEST_MODE = False
+
+# ---------- ค่าจริงจากไฟล์ config.py ----------
+# ใส่ WiFi + คีย์อุปกรณ์ในไฟล์ config.py แยก (ดูตัวอย่างใน config.example.py) จะได้ไม่เผลออัปคีย์ขึ้น GitHub
+# ถ้ามีไฟล์ config.py บนบอร์ด ค่าในไฟล์นั้นจะทับค่าข้างบน
+try:
+    from config import *  # noqa: F401,F403
+except ImportError:
+    pass
 
 
 # ============================================================
@@ -83,7 +97,7 @@ STEP = 4                     # คำนวณจากทุก ๆ 4 ค่า
 WINDOW_MS = 125              # สรุปค่า dB ทุก 1/8 วินาที
 DRAW_MS = 200                # วาดจอใหม่ทุก 0.2 วินาที
 PRINT_MS = 1000              # พิมพ์ค่าลง Shell ของ Thonny ทุก 1 วินาที
-WARMUP_MS = 2000             # ไมค์เพิ่งเปิด ค่าช่วงแรกยังไม่นิ่ง ยังไม่นับ
+WARMUP_MS = 1000             # ไมค์เพิ่งเปิด ค่าช่วงแรกยังไม่นิ่ง ข้ามไปก่อน
 HEARTBEAT_MS = 30000         # ถามสถานะการจองจากเว็บทุก 30 วินาที
 WIFI_RETRY_MS = 20000        # WiFi หลุด -> ลองต่อใหม่ทุก 20 วินาที
 REPORT_RETRY_MS = 10000      # ส่งหักคะแนนไม่สำเร็จ -> ลองใหม่ทุก 10 วินาที
@@ -91,12 +105,13 @@ NOTE_MS = 2500               # ข้อความแจ้งเตือน�
 
 
 # ============================================================
-#  ส่วนที่ 3 — คำนวณความดังเสียง
+#  ส่วนที่ 3 — คำนวณความดังเสียง + ลดเสียงรบกวน
 # ============================================================
 @micropython.native
 def chunk_rms(buf, count, step):
     # ค่า RMS (ความแรงเฉลี่ย) ของเสียงช่วงสั้น ๆ นี้
-    # ไมค์ส่งมาค่าละ 4 ไบต์ ข้อมูลเสียงจริง 24 บิตอยู่ในไบต์ที่ 2–4 / ลบค่าเฉลี่ย (DC) ของไมค์ออกก่อน
+    # ไมค์ส่งมาค่าละ 4 ไบต์ ข้อมูลเสียงจริง 24 บิตอยู่ในไบต์ที่ 2–4
+    # ลบค่าเฉลี่ย (DC) ของไมค์ออกก่อน = denoise ชั้นแรก (ร่วมกับตัวกรองความถี่ต่ำ ~60 Hz ในตัวไมค์)
     n = 0
     total = 0.0
     i = 0
@@ -132,6 +147,59 @@ def to_db(rms):
         return 0.0
     dbfs = 20 * math.log10(rms / 8388608)
     return dbfs - MIC_SENSITIVITY_DBFS + 94 + DB_OFFSET
+
+
+def median(values):
+    s = sorted(values)
+    n = len(s)
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+class Denoiser:
+    # ลดเสียงรบกวนอีก 2 ชั้น (ทำกับค่า dB ทุก 1/8 วินาที ใช้แรงบอร์ดน้อยมาก)
+    #  ชั้น 2) หักเสียงพื้นหลัง (แอร์ พัดลม คอม): เรียนรู้ระดับเสียงห้องตอนเงียบ แล้วลบพลังงานส่วนนั้นออก
+    #  ชั้น 3) ตัดเสียงกระแทกสั้น ๆ (ของตก ปิดประตู): ใช้ค่ากลาง (median) ของ 5 ช่วงล่าสุด
+    def __init__(self):
+        self.floor = None   # ระดับเสียงพื้นหลัง (dB) — None = ยังวัดไม่เสร็จ
+        self.calib = []     # ค่าที่เก็บตอนวัดเสียงพื้นหลังหลังเปิดเครื่อง
+        self.history = []   # ค่าล่าสุดสำหรับหา median
+
+    def calibrating(self):
+        return DENOISE and self.floor is None
+
+    def update(self, db_raw):
+        # ใส่ค่า dB ดิบจากไมค์ -> คืนค่า dB หลังลดเสียงรบกวน
+        if not DENOISE:
+            return db_raw
+
+        # ช่วงแรกหลังเปิดเครื่อง: ฟังเสียงห้องก่อน (ยังไม่นับเสียงดัง)
+        if self.floor is None:
+            self.calib.append(db_raw)
+            if len(self.calib) * WINDOW_MS >= CALIBRATE_SECONDS * 1000:
+                self.floor = min(median(self.calib), FLOOR_MAX_DB)
+                self.calib = []
+                print("วัดเสียงพื้นหลังเสร็จ: %.1f dB" % self.floor)
+            return max(db_raw, DB_MIN)
+
+        # ปรับระดับเสียงพื้นหลังตามห้อง:
+        #   ห้องเงียบลง -> ตามลงเร็ว / ดังขึ้นนิดหน่อย (ไม่เกิน 6 dB) -> ตามขึ้นช้า ๆ
+        #   ดังกว่าพื้นหลังเกิน 6 dB (เสียงคนพูด) -> ไม่นับเป็นพื้นหลัง
+        if db_raw < self.floor:
+            self.floor += (db_raw - self.floor) * 0.2
+        elif db_raw < self.floor + 6:
+            self.floor += (db_raw - self.floor) * 0.01
+        self.floor = min(self.floor, FLOOR_MAX_DB)
+
+        # หักพลังงานเสียงพื้นหลังออก (เสียงรวมกันแบบบวกพลังงาน ไม่ใช่บวกเลข dB ตรง ๆ)
+        p = 10 ** (db_raw / 10) - 10 ** (self.floor / 10)
+        clean = 10 * math.log10(p) if p > 1 else 0.0
+        clean = max(clean, DB_MIN)
+
+        # ตัดเสียงกระแทก: ค่ากลางของ 5 ช่วงล่าสุด (เสียงที่ดังแค่ 1–2 ช่วง ~0.25 วิ จะหายไป)
+        self.history.append(clean)
+        if len(self.history) > MEDIAN_WINDOWS:
+            self.history.pop(0)
+        return median(self.history)
 
 
 # ============================================================
@@ -335,6 +403,8 @@ def apply_status(res, booking, counter, now):
     allowed = bool(res.get("active", True)) and bool(res.get("sensor_enabled", True))
     penalty = int(res.get("penalty", 5))
     seat = res.get("seat") or "----"
+    if "booking" not in res:
+        print("!! เว็บยังไม่ส่งข้อมูลการจองมา — รัน supabase/points.sql เวอร์ชันล่าสุดอีกรอบ")
     b = res.get("booking")
     changed = False
     if not b:
@@ -434,6 +504,7 @@ def main():
     setup_hardware()
     counter = NoiseCounter()
     booking = Booking()
+    denoiser = Denoiser()
     allowed = True           # ผู้ดูแลเปิดอุปกรณ์ + การหักแต้มอยู่ไหม
     penalty = 5              # แต้มที่หักต่อครั้ง (อัปเดตจากเว็บ)
     seat = "TEST" if TEST_MODE else "----"
@@ -450,6 +521,7 @@ def main():
     win_start = start
     power = 0.0
     chunks = 0
+    raw_db = 0.0
     db = 0.0
     shown_db = 0.0
     last_draw = start
@@ -460,8 +532,10 @@ def main():
         booking.start_test(start)
     show_leds(0)
     print("เริ่มเฝ้าเสียง — เกณฑ์ %d dB, ดังสะสม %d วิ = 1 ครั้ง" % (LIMIT_DB, LOUD_SECONDS))
+    if DENOISE:
+        print("ลดเสียงรบกวน: เปิด — %d วิแรกขอให้เงียบ บอร์ดกำลังฟังเสียงพื้นหลังของห้อง" % CALIBRATE_SECONDS)
     if not TEST_MODE and not server_ready():
-        print("!! ยังไม่ได้ตั้งค่า WiFi/เว็บ (ส่วนที่ 1) — จะแสดงแค่ค่า dB หรือเปิด TEST_MODE = True เพื่อทดสอบ")
+        print("!! ยังไม่ได้ตั้งค่า WiFi/เว็บ (ไฟล์ config.py) — จะแสดงแค่ค่า dB หรือเปิด TEST_MODE = True เพื่อทดสอบ")
 
     while True:
         # ---------- อ่านเสียงจากไมค์ ----------
@@ -481,14 +555,16 @@ def main():
         else:
             silent_since = None
 
-        # ---------- ทุก 1/8 วินาที: สรุป dB แล้วนับเสียงดัง ----------
+        # ---------- ทุก 1/8 วินาที: สรุป dB -> ลดเสียงรบกวน -> นับเสียงดัง ----------
         elapsed = time.ticks_diff(now, win_start)
         if elapsed >= WINDOW_MS and chunks:
-            db = to_db(math.sqrt(power / chunks))
+            raw_db = to_db(math.sqrt(power / chunks))
             power = 0.0
             chunks = 0
             win_start = now
             dt = min(elapsed, WINDOW_MS * 2)  # ช่วงที่บอร์ดติดคุยกับเว็บ ไม่นับเป็นเวลาดัง/เงียบ
+            warm = time.ticks_diff(now, start) > WARMUP_MS
+            db = denoiser.update(raw_db) if warm else max(raw_db, DB_MIN)
             shown_db = db if db > shown_db else shown_db * 0.7 + db * 0.3  # ตัวเลขขึ้นเร็ว ลงช้า อ่านง่าย
 
             # หมดเวลาการจอง -> ดับไฟ เริ่มนับใหม่
@@ -502,7 +578,7 @@ def main():
                 if TEST_MODE:
                     booking.start_test(now)
 
-            if booking.active(now) and allowed and time.ticks_diff(now, start) > WARMUP_MS:
+            if booking.active(now) and allowed and warm and not denoiser.calibrating():
                 if counter.update(db, dt):
                     n = counter.strikes
                     show_leds(n)
@@ -580,16 +656,19 @@ def main():
             note = ""
         if time.ticks_diff(now, last_draw) >= DRAW_MS:
             last_draw = now
-            draw(shown_db, counter, booking, now, online, seat, penalty, note)
+            draw(shown_db, counter, booking, now, online, seat, penalty,
+                 note or ("CALIBRATING" if denoiser.calibrating() else ""))
         if time.ticks_diff(now, last_print) >= PRINT_MS:
             last_print = now
+            raw = " (ดิบ %.1f, พื้นหลัง %.1f)" % (raw_db, denoiser.floor) if DENOISE and denoiser.floor is not None else ""
             if booking.active(now):
                 print(
-                    "dB %.1f | ดังสะสม %.1f วิ | ครั้งที่ %d | จอง %s–%s เหลือ %d นาที"
-                    % (db, counter.loud_ms / 1000, counter.strikes, booking.start, booking.end, booking.minutes_left(now))
+                    "dB %.1f%s | ดังสะสม %.1f วิ | ครั้งที่ %d | จอง %s–%s เหลือ %d นาที"
+                    % (db, raw, counter.loud_ms / 1000, counter.strikes, booking.start, booking.end,
+                       booking.minutes_left(now))
                 )
             else:
-                print("dB %.1f | ไม่มีการจองตอนนี้" % db)
+                print("dB %.1f%s | ไม่มีการจองตอนนี้" % (db, raw))
 
 
 if __name__ == "__main__":

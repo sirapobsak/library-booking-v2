@@ -143,7 +143,9 @@ supabase/
 - บอร์ด (`esp32/noise_meter/main.py`, **MicroPython/Thonny**) เรียก `device_heartbeat()` ทุก 30 วิ -> ได้สถานะการจองของที่นั่งตอนนี้ (`booking.id/ends_in/...`)
   บอร์ด**นับเสียงดังเอง** (เกิน 65 dB สะสม 5 วิ = 1 ครั้ง, เงียบติดกัน 10 วิ = ล้าง, ไฟ เขียว/เหลือง/แดง) แล้วเรียก `report_noise()` ตั้งแต่ครั้งที่ 3 ทุกครั้ง
   -> `cooldown_seconds` ฝั่งเว็บต้อง **ไม่เกิน 5** ไม่งั้นครั้งที่ 4+ จะได้ `COOLDOWN` / ปุ่ม "จำลองเสียงดัง" = `admin_simulate_noise()`
-- โค้ดบอร์ด + วิธีต่อสายอยู่ที่ `esp32/` — เวลาในการจองเทียบกับ `now() at time zone 'Asia/Bangkok'`
+- โค้ดบอร์ด + วิธีต่อสายอยู่ที่ `esp32/`
+- บอร์ดอ่าน WiFi + DEVICE_ID/KEY จาก `esp32/noise_meter/config.py` (**อยู่ใน .gitignore — repo เป็น public ห้าม commit**) ตัวอย่างใน `config.example.py`
+- denoise บนบอร์ด (`Denoiser` ใน main.py): หักพลังงานเสียงพื้นหลังที่เรียนรู้เอง (สูงสุด 55 dB) + median 5 ช่วงตัดเสียงกระแทก — ทดสอบ logic ได้บนคอมโดยจำลองโมดูล MicroPython — เวลาในการจองเทียบกับ `now() at time zone 'Asia/Bangkok'`
 - โหมดทดลอง (`npm run dev:mock`): `points.js` เลียนแบบฟังก์ชัน SQL ใน localStorage และทุกบัญชีเป็นผู้ดูแล — **ห้ามให้โหมดนี้ทำงานบนเว็บจริงที่มี Supabase**
 
 ### เพิ่มโซนใหม่ / เพิ่มผังให้โซนอื่น
