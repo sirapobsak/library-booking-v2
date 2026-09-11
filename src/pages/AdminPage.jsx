@@ -615,7 +615,7 @@ function DevicesTab({ api }) {
 
                 <dl className="mt-3 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
                   <Stat label="ติดต่อล่าสุด" value={d.lastSeenAt ? ago(d.lastSeenAt) : 'ยังไม่เคย'} />
-                  <Stat label="ระดับเสียงล่าสุด" value={d.lastLevel ?? '–'} />
+                  <Stat label="ระดับเสียงล่าสุด" value={d.lastLevel != null ? `${d.lastLevel} dB` : '–'} />
                   <Stat label="หักแต้มล่าสุด" value={d.lastPenaltyAt ? ago(d.lastPenaltyAt) : '–'} />
                 </dl>
 
@@ -691,10 +691,10 @@ function KeyModal({ info, onClose }) {
   const url = import.meta.env.VITE_SUPABASE_URL || 'https://xxxx.supabase.co'
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'ใส่ anon key ของโปรเจกต์'
   const snippet = [
-    `const char* SUPABASE_URL      = "${url}";`,
-    `const char* SUPABASE_ANON_KEY = "${anonKey}";`,
-    `const char* DEVICE_ID         = "${info.id}";`,
-    `const char* DEVICE_KEY        = "${info.key}";`,
+    `SUPABASE_URL = "${url}"`,
+    `SUPABASE_ANON_KEY = "${anonKey}"`,
+    `DEVICE_ID = "${info.id}"`,
+    `DEVICE_KEY = "${info.key}"`,
   ].join('\n')
 
   async function copy() {
@@ -716,7 +716,7 @@ function KeyModal({ info, onClose }) {
         </p>
         <div>
           <p className="mb-1.5 text-sm text-slate-600">
-            วาง 4 บรรทัดนี้แทนส่วน “ตั้งค่าเซิร์ฟเวอร์” ใน <code>esp32/noise_sensor/noise_sensor.ino</code>
+            วาง 4 บรรทัดนี้แทนส่วน “ตั้งค่าเซิร์ฟเวอร์” ใน <code>esp32/noise_meter/main.py</code>
           </p>
           <pre className="overflow-x-auto rounded-xl bg-slate-900 p-4 text-xs leading-relaxed text-slate-100">{snippet}</pre>
         </div>
@@ -819,7 +819,7 @@ function SettingsTab({ api }) {
           unit="วินาที"
           value={form.cooldownSeconds}
           onChange={set('cooldownSeconds')}
-          hint="กันเสียงดังต่อเนื่องครั้งเดียวถูกหักซ้ำหลายรอบ (นับแยกทีละอุปกรณ์)"
+          hint="กันบอร์ดส่งซ้ำรัว ๆ (นับแยกทีละอุปกรณ์) — บอร์ดนับเสียงดังครั้งละ 5 วินาทีเอง จึงควรตั้งไม่เกิน 5"
         />
         <NumberField
           label="คะแนนเริ่มต้น"

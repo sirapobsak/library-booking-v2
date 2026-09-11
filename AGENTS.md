@@ -140,7 +140,9 @@ supabase/
 - ผู้ดูแล = แถวในตาราง `admins` (คนแรกเพิ่มด้วย SQL ท้าย `points.sql`) ฟังก์ชัน `admin_*` ทุกตัวเรียก `_require_admin()` ก่อน
 - ESP32 1 ตัว = 1 ที่นั่ง (`noise_devices`) เรียก `report_noise(device, key, level)` ด้วย anon key + **คีย์อุปกรณ์** (เก็บเป็น bcrypt hash)
   -> `_apply_noise()` หักแต้ม**ทุกคนในการจองที่นั่งนั้นที่กำลังนั่งอยู่ตอนนี้** (คนจอง + members) มีช่วงพัก `cooldown_seconds` ต่ออุปกรณ์
-- `device_heartbeat()` ทุก 1 นาที = สถานะออนไลน์ในหน้าผู้ดูแล / ปุ่ม "จำลองเสียงดัง" = `admin_simulate_noise()` (ทดสอบได้โดยไม่มีบอร์ด)
+- บอร์ด (`esp32/noise_meter/main.py`, **MicroPython/Thonny**) เรียก `device_heartbeat()` ทุก 30 วิ -> ได้สถานะการจองของที่นั่งตอนนี้ (`booking.id/ends_in/...`)
+  บอร์ด**นับเสียงดังเอง** (เกิน 65 dB สะสม 5 วิ = 1 ครั้ง, เงียบติดกัน 10 วิ = ล้าง, ไฟ เขียว/เหลือง/แดง) แล้วเรียก `report_noise()` ตั้งแต่ครั้งที่ 3 ทุกครั้ง
+  -> `cooldown_seconds` ฝั่งเว็บต้อง **ไม่เกิน 5** ไม่งั้นครั้งที่ 4+ จะได้ `COOLDOWN` / ปุ่ม "จำลองเสียงดัง" = `admin_simulate_noise()`
 - โค้ดบอร์ด + วิธีต่อสายอยู่ที่ `esp32/` — เวลาในการจองเทียบกับ `now() at time zone 'Asia/Bangkok'`
 - โหมดทดลอง (`npm run dev:mock`): `points.js` เลียนแบบฟังก์ชัน SQL ใน localStorage และทุกบัญชีเป็นผู้ดูแล — **ห้ามให้โหมดนี้ทำงานบนเว็บจริงที่มี Supabase**
 

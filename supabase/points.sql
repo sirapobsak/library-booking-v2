@@ -32,7 +32,7 @@ create table if not exists public.point_settings (
   id               int primary key default 1 check (id = 1),
   starting_points  int not null default 100 check (starting_points >= 0),  -- คะแนนเริ่มต้น
   noise_penalty    int not null default 5   check (noise_penalty >= 0),    -- หักต่อการตรวจพบ 1 ครั้ง
-  cooldown_seconds int not null default 60  check (cooldown_seconds >= 0), -- พักหลังหัก (ต่ออุปกรณ์)
+  cooldown_seconds int not null default 5   check (cooldown_seconds >= 0), -- พักหลังหัก (ต่ออุปกรณ์) บอร์ดนับครั้งละ 5 วิ จึงไม่ควรเกิน 5
   sensor_enabled   boolean not null default true,                          -- เปิด/ปิดการหักจากเซนเซอร์
   updated_at       timestamptz not null default now()
 );
@@ -438,10 +438,15 @@ begin
   return public._apply_noise(p_device, p_level);
 end $$;
 
--- ESP32 เรียกทุก 1 นาทีเพื่อบอกว่ายังออนไลน์ (+ รู้ว่าผู้ดูแลปิดอุปกรณ์/เซนเซอร์ไว้ไหม)
+-- ESP32 เรียกทุก 30 วินาที: บอกว่ายังออนไลน์ + ถามว่าตอนนี้ที่นั่งนี้มีการจองอยู่ไหม
+--   บอร์ดใช้ข้อมูลนี้ตัดสินใจว่าจะเฝ้าเสียงหรือไม่ และรู้ว่าการจองจะหมดเมื่อไร (ไฟดับ/นับใหม่)
 create or replace function public.device_heartbeat(p_device text, p_key text, p_level int default null)
 returns jsonb language plpgsql security definer set search_path = public, extensions as $$
-declare d public.noise_devices; s public.point_settings;
+declare
+  d     public.noise_devices;
+  s     public.point_settings;
+  b     public.seat_bookings;
+  v_now timestamp := now() at time zone 'Asia/Bangkok';  -- เวลาจองเก็บเป็นเวลาไทย
 begin
   select * into d from public.noise_devices where id = p_device;
   if not found or p_key is null or crypt(p_key, d.key_hash) <> d.key_hash then
@@ -451,7 +456,28 @@ begin
      set last_seen_at = now(), last_level = coalesce(p_level, last_level)
    where id = p_device;
   select * into s from public.point_settings where id = 1;
-  return jsonb_build_object('ok', true, 'active', d.active, 'sensor_enabled', s.sensor_enabled);
+
+  select * into b from public.seat_bookings sb
+   where sb.zone_id = d.zone_id and sb.seat_id = d.seat_id
+     and sb.booking_date + sb.start_time <= v_now
+     and v_now < sb.booking_date + sb.end_time
+   order by sb.start_time
+   limit 1;
+
+  return jsonb_build_object(
+    'ok', true,
+    'active', d.active,
+    'sensor_enabled', s.sensor_enabled,
+    'penalty', s.noise_penalty,
+    'seat', d.seat_id,
+    'booking', case when b.id is null then null else jsonb_build_object(
+      'id', b.id,
+      'start', to_char(b.start_time, 'HH24:MI'),
+      'end', to_char(b.end_time, 'HH24:MI'),
+      'ends_in', floor(extract(epoch from ((b.booking_date + b.end_time) - v_now)))::int,
+      'people', 1 + (select count(*) from public.seat_booking_members m where m.booking_id = b.id)
+    ) end
+  );
 end $$;
 
 -- ผู้ดูแลกด "จำลองเสียงดัง" จากหน้าเว็บ — ใช้ทดสอบระบบก่อนมีบอร์ดจริง

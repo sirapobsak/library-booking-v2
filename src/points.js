@@ -17,7 +17,7 @@ const CHANGE_EVENT = 'lb2-points-changed' // บอกทุกคอมโพ�
 const BOOKINGS_KEY = 'lb2_bookings_v2' // ใช้หา "ใครจองที่นั่งนี้อยู่" ตอนจำลองเซนเซอร์ในโหมดทดลอง
 const MOCK_USERS_KEY = 'lb2_mock_users' // บัญชีโหมดทดลองจาก auth.jsx
 
-export const DEFAULT_SETTINGS = { startingPoints: 100, noisePenalty: 5, cooldownSeconds: 60, sensorEnabled: true }
+export const DEFAULT_SETTINGS = { startingPoints: 100, noisePenalty: 5, cooldownSeconds: 5, sensorEnabled: true }
 
 const notify = () => window.dispatchEvent(new Event(CHANGE_EVENT))
 
