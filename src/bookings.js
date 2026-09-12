@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from './auth.jsx'
 import { supabase } from './supabase.js'
+import { localBookingRestriction } from './points.js'
 
 // ============================================================
 //  ระบบจองที่นั่ง + เข้าร่วมโต๊ะด้วย QR / รหัส 6 หลัก
@@ -60,6 +61,9 @@ const ERR = {
   ALREADY_JOINED: 'คุณเข้าร่วมโต๊ะนี้ไปแล้ว',
   EXPIRED: 'การจองนี้หมดเวลาแล้ว',
   FULL: 'โต๊ะนี้มีคนเข้าร่วมครบจำนวนแล้ว',
+  // จากระบบคะแนนความประพฤติ (points.sql)
+  SUSPENDED: 'บัญชีถูกระงับการเข้าใช้ชั่วคราว (ความประพฤติต่ำกว่า 20) — จอง/เข้าร่วมโต๊ะไม่ได้จนครบกำหนด ดูรายละเอียดที่หน้าคะแนนสะสม',
+  RESTRICTED_ROOM: 'ความประพฤติต่ำกว่า 60 (ถูกจำกัดสิทธิ์) — จองห้อง/พื้นที่พิเศษไม่ได้ชั่วคราว เลือกโต๊ะอื่นได้',
 }
 
 function errorMessage(error) {
@@ -176,6 +180,9 @@ async function createBooking({ cloud, user }, { zoneId, seatId, date, start, end
     if (!isMissingBackend(error)) return { ok: false, message: errorMessage(error) }
     backendMissing = true
   }
+
+  const block = localBookingRestriction(user.id, seatId)
+  if (block) return { ok: false, message: ERR[block] }
 
   const list = readLocal()
   const clash = list.some(
@@ -311,6 +318,8 @@ async function joinBooking({ cloud, user }, code) {
   if (b.members.some((m) => m.userId === user.id)) return { ok: false, message: ERR.ALREADY_JOINED }
   if (!isActive(b)) return { ok: false, message: ERR.EXPIRED }
   if (b.members.length + 1 >= b.partySize) return { ok: false, message: ERR.FULL }
+  const block = localBookingRestriction(user.id, b.seatId)
+  if (block) return { ok: false, message: ERR[block] }
 
   b.members.push({ userId: user.id, name: fullName(user), joinedAt: new Date().toISOString() })
   writeLocal(list)

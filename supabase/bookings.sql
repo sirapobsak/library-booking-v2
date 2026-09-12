@@ -116,16 +116,22 @@ create or replace function public.create_booking(
 returns public.seat_bookings
 language plpgsql security definer set search_path = public as $$
 declare
-  v_uid  uuid := auth.uid();
-  v_name text;
-  v_code text;
-  v_row  public.seat_bookings;
+  v_uid   uuid := auth.uid();
+  v_name  text;
+  v_code  text;
+  v_block text;
+  v_row   public.seat_bookings;
 begin
   if v_uid is null then raise exception 'NOT_LOGGED_IN'; end if;
   if p_party is null or p_party < 1 or p_party > 10 then raise exception 'BAD_PARTY'; end if;
   if p_end <= p_start then raise exception 'BAD_TIME'; end if;
   -- กันจองย้อนหลัง (เทียบกับเวลาไทย เพราะวัน/เวลาที่ส่งมาเป็นเวลาไทย)
   if (p_date + p_end) <= (now() at time zone 'Asia/Bangkok') then raise exception 'PAST'; end if;
+  -- ระบบคะแนนความประพฤติ (points.sql): ถูกระงับ -> จองไม่ได้ / จำกัดสิทธิ์ -> จองห้อง R1–R3 ไม่ได้
+  if to_regprocedure('public._booking_restriction(uuid, text)') is not null then
+    execute 'select public._booking_restriction($1, $2)' into v_block using v_uid, p_seat;
+    if v_block is not null then raise exception '%', v_block; end if;
+  end if;
 
   select trim(coalesce(first_name, '') || ' ' || coalesce(last_name, ''))
     into v_name from profiles where id = v_uid;
@@ -172,6 +178,7 @@ declare
   v_uid   uuid := auth.uid();
   v_name  text;
   v_count int;
+  v_block text;
   b       public.seat_bookings;
 begin
   if v_uid is null then raise exception 'NOT_LOGGED_IN'; end if;
@@ -185,6 +192,10 @@ begin
   end if;
   if (b.booking_date + b.end_time) <= (now() at time zone 'Asia/Bangkok') then
     raise exception 'EXPIRED';
+  end if;
+  if to_regprocedure('public._booking_restriction(uuid, text)') is not null then
+    execute 'select public._booking_restriction($1, $2)' into v_block using v_uid, b.seat_id;
+    if v_block is not null then raise exception '%', v_block; end if;
   end if;
 
   select count(*) into v_count from seat_booking_members where booking_id = b.id;

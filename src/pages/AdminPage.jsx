@@ -3,22 +3,27 @@ import {
   AlertCircle,
   ArrowRightLeft,
   Check,
+  Coins,
   Copy,
   Cpu,
+  Flame,
   History,
   KeyRound,
   Plug,
   RefreshCw,
+  Scale,
   Search,
   Settings,
   ShieldCheck,
   ShieldOff,
+  Ticket,
   Trash2,
   Unplug,
   Users,
   Volume2,
 } from 'lucide-react'
 import Header from '../components/Header.jsx'
+import LevelBadge from '../components/LevelBadge.jsx'
 import Modal from '../components/Modal.jsx'
 import { useAuth } from '../auth.jsx'
 import { getZone } from '../data.js'
@@ -27,13 +32,15 @@ import { KIND_LABEL, QUIET_SEATS } from '../layouts/quietZone.js'
 import { noiseStatusText, useMyPoints, usePointsAdmin } from '../points.js'
 
 // ============================================================
-//  หน้าผู้ดูแลระบบ — จัดการคะแนนสะสม + เซนเซอร์ตรวจจับเสียง (ESP32)
+//  หน้าผู้ดูแลระบบ — คะแนนความประพฤติ + เหรียญ + คำอุทธรณ์ + คูปอง + เซนเซอร์ตรวจจับเสียง (ESP32)
 //  เข้าได้เฉพาะผู้ดูแล (ฝั่งฐานข้อมูลเช็คสิทธิ์ซ้ำอีกชั้นในทุกฟังก์ชัน)
 // ============================================================
 
 const TABS = [
   { id: 'users', label: 'ผู้ใช้ & คะแนน', icon: Users },
-  { id: 'logs', label: 'ประวัติคะแนน', icon: History },
+  { id: 'logs', label: 'ประวัติ', icon: History },
+  { id: 'appeals', label: 'คำอุทธรณ์', icon: Scale },
+  { id: 'coupons', label: 'คูปอง', icon: Ticket },
   { id: 'devices', label: 'อุปกรณ์เซนเซอร์', icon: Cpu },
   { id: 'settings', label: 'ตั้งค่า', icon: Settings },
 ]
@@ -42,11 +49,17 @@ const TABS = [
 const SOURCE = {
   sensor: { label: 'เซนเซอร์', cls: 'bg-amber-100 text-amber-800' },
   admin: { label: 'ผู้ดูแล', cls: 'bg-sky-100 text-sky-800' },
-  system: { label: 'ระบบ', cls: 'bg-slate-100 text-slate-600' },
+  system: { label: 'ระบบ (อัตโนมัติ)', cls: 'bg-slate-100 text-slate-600' },
+  redeem: { label: 'แลกคูปอง', cls: 'bg-violet-100 text-violet-800' },
+}
+
+const METER = {
+  standing: { label: 'ความประพฤติ', unit: 'คะแนน', cls: 'bg-sky-50 text-sky-700' },
+  coins: { label: 'เหรียญ', unit: 'เหรียญ', cls: 'bg-amber-50 text-amber-700' },
 }
 
 const DEVICE_ZONE = 'quiet' // ตอนนี้มีผังที่นั่งแค่โซนเงียบ
-const ONLINE_MS = 150 * 1000 // ESP32 ส่ง heartbeat ทุก 60 วิ -> เงียบไปเกิน 2.5 นาที = ออฟไลน์
+const ONLINE_MS = 150 * 1000 // ESP32 ส่ง heartbeat ทุก 30 วิ -> เงียบไปเกิน 2.5 นาที = ออฟไลน์
 
 const formatTime = (iso) => new Date(iso).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })
 
@@ -69,8 +82,8 @@ export default function AdminPage() {
     body = <p className="text-slate-500">กำลังโหลด...</p>
   } else if (!installed) {
     body = (
-      <Notice icon={AlertCircle} title="ระบบคะแนนยังไม่ได้ติดตั้งบนฐานข้อมูล">
-        รัน supabase/points.sql ใน Supabase Dashboard ก่อน (วิธีอยู่หัวไฟล์นั้น)
+      <Notice icon={AlertCircle} title="ระบบคะแนนบนฐานข้อมูลยังไม่ใช่เวอร์ชันล่าสุด">
+        รัน supabase/bookings.sql แล้วตามด้วย supabase/points.sql ใน Supabase Dashboard (วิธีอยู่หัวไฟล์)
       </Notice>
     )
   } else if (!isAdmin) {
@@ -108,6 +121,8 @@ export default function AdminPage() {
 
         {tab === 'users' && <UsersTab api={api} meId={user.id} />}
         {tab === 'logs' && <LogsTab api={api} />}
+        {tab === 'appeals' && <AppealsTab api={api} />}
+        {tab === 'coupons' && <CouponsTab api={api} />}
         {tab === 'devices' && <DevicesTab api={api} />}
         {tab === 'settings' && <SettingsTab api={api} />}
       </>
@@ -124,7 +139,7 @@ export default function AdminPage() {
           </span>
           <div>
             <h1 className="text-2xl font-bold text-slate-800">ผู้ดูแลระบบ</h1>
-            <p className="text-sm text-slate-500">จัดการคะแนนสะสมและเซนเซอร์ตรวจจับเสียง</p>
+            <p className="text-sm text-slate-500">จัดการคะแนนความประพฤติ เหรียญ คูปอง และเซนเซอร์ตรวจจับเสียง</p>
           </div>
         </div>
         {body}
@@ -161,14 +176,12 @@ function UsersTab({ api, meId }) {
     return () => clearTimeout(t)
   }, [search, load])
 
-  const patch = (id, fields) => setUsers((list) => list.map((u) => (u.id === id ? { ...u, ...fields } : u)))
-
   async function quick(u, delta) {
     setBusyId(u.id)
-    const r = await api.adjust(u.id, delta, `ปรับด่วน ${delta > 0 ? '+' : ''}${delta} แต้ม`)
+    const r = await api.adjust(u.id, delta, `ปรับด่วน ${delta > 0 ? '+' : ''}${delta} ความประพฤติ`)
     setBusyId(null)
-    if (r.ok) patch(u.id, { points: r.data })
-    else setFlash({ type: 'error', text: r.message })
+    if (!r.ok) setFlash({ type: 'error', text: r.message })
+    load(search.trim()) // ระดับสิทธิ์/การระงับอาจเปลี่ยนตาม
   }
 
   return (
@@ -196,6 +209,7 @@ function UsersTab({ api, meId }) {
             <div className="min-w-0 flex-1 basis-56">
               <p className="flex flex-wrap items-center gap-2 font-semibold text-slate-800">
                 {u.name}
+                <LevelBadge level={u.level} />
                 {u.isAdmin && (
                   <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">ผู้ดูแล</span>
                 )}
@@ -204,11 +218,28 @@ function UsersTab({ api, meId }) {
                 )}
               </p>
               <p className="truncate text-sm text-slate-500">{[u.email, u.phone].filter(Boolean).join(' · ')}</p>
+              {u.suspendedUntil && <p className="text-xs text-rose-600">ระงับถึง {formatTime(u.suspendedUntil)}</p>}
             </div>
 
-            <div className="w-20 text-right">
-              <p className="text-2xl font-bold tabular-nums text-slate-800">{u.points}</p>
-              <p className="text-xs text-slate-400">แต้ม</p>
+            <div className="flex items-end gap-4 text-right">
+              <div className="w-16">
+                <p className="text-2xl font-bold tabular-nums text-slate-800">{u.points}</p>
+                <p className="text-xs text-slate-400">ความประพฤติ</p>
+              </div>
+              <div className="w-14">
+                <p className="flex items-center justify-end gap-1 text-lg font-bold tabular-nums text-amber-600">
+                  <Coins className="h-4 w-4" />
+                  {u.coins}
+                </p>
+                <p className="text-xs text-slate-400">เหรียญ</p>
+              </div>
+              <div className="w-10">
+                <p className="flex items-center justify-end gap-0.5 text-lg font-bold tabular-nums text-orange-500">
+                  <Flame className="h-4 w-4" />
+                  {u.streak}
+                </p>
+                <p className="text-xs text-slate-400">วัน</p>
+              </div>
             </div>
 
             <div className="flex items-center gap-1.5">
@@ -218,7 +249,7 @@ function UsersTab({ api, meId }) {
                   type="button"
                   disabled={busyId === u.id}
                   onClick={() => quick(u, d)}
-                  aria-label={`${d > 0 ? 'เพิ่ม' : 'ลด'} ${Math.abs(d)} แต้มให้ ${u.name}`}
+                  aria-label={`${d > 0 ? 'เพิ่ม' : 'ลด'}ความประพฤติ ${Math.abs(d)} ให้ ${u.name}`}
                   className={`h-9 min-w-[2.75rem] rounded-lg px-2 text-sm font-semibold tabular-nums transition disabled:opacity-50 ${
                     d < 0 ? 'bg-rose-50 text-rose-700 hover:bg-rose-100' : 'bg-green-50 text-green-700 hover:bg-green-100'
                   }`}
@@ -245,10 +276,10 @@ function UsersTab({ api, meId }) {
           api={api}
           meId={meId}
           onClose={() => setEditing(null)}
-          onSaved={(fields, text) => {
-            patch(editing.id, fields)
+          onSaved={(text) => {
             setEditing(null)
             setFlash({ type: 'ok', text })
+            load(search.trim())
           }}
         />
       )}
@@ -257,28 +288,33 @@ function UsersTab({ api, meId }) {
 }
 
 function EditPointsModal({ user, api, meId, onClose, onSaved }) {
+  const [meter, setMeter] = useState('standing') // standing = ความประพฤติ, coins = เหรียญ
   const [mode, setMode] = useState('add') // add = เพิ่ม, sub = ลด, set = ตั้งเป็นค่านี้
   const [amount, setAmount] = useState('')
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
+  const current = meter === 'coins' ? user.coins : user.points
+  const max = meter === 'coins' ? Infinity : 100
+  const unit = METER[meter].unit
   const n = Number(amount)
-  const valid = amount !== '' && Number.isInteger(n) && n >= 0 && (mode === 'set' || n > 0)
-  const preview = !valid ? null : mode === 'add' ? user.points + n : mode === 'sub' ? Math.max(0, user.points - n) : n
+  const valid = amount !== '' && Number.isInteger(n) && n >= 0 && (mode === 'set' ? n <= max : n > 0)
+  const clamp = (v) => Math.min(max, Math.max(0, v))
+  const preview = !valid ? null : mode === 'add' ? clamp(current + n) : mode === 'sub' ? clamp(current - n) : n
 
   async function save(e) {
     e.preventDefault()
-    if (!valid) return setError('กรอกจำนวนแต้มเป็นเลขจำนวนเต็ม')
+    if (!valid) return setError(meter === 'standing' ? 'กรอกเลขจำนวนเต็ม (ความประพฤติ 0–100)' : 'กรอกเลขจำนวนเต็ม')
     setBusy(true)
     setError('')
     const r =
       mode === 'set'
-        ? await api.setPoints(user.id, n, reason)
-        : await api.adjust(user.id, mode === 'add' ? n : -n, reason)
+        ? await api.setPoints(user.id, n, reason, meter)
+        : await api.adjust(user.id, mode === 'add' ? n : -n, reason, meter)
     setBusy(false)
     if (!r.ok) return setError(r.message)
-    onSaved({ points: r.data }, `อัปเดตคะแนนของ ${user.name} เป็น ${r.data} แต้มแล้ว`)
+    onSaved(`อัปเดต${METER[meter].label}ของ ${user.name} เป็น ${r.data} ${unit}แล้ว`)
   }
 
   async function toggleAdmin() {
@@ -287,47 +323,45 @@ function EditPointsModal({ user, api, meId, onClose, onSaved }) {
     const r = await api.setAdmin(user.id, !user.isAdmin)
     setBusy(false)
     if (!r.ok) return setError(r.message)
-    onSaved(
-      { isAdmin: !user.isAdmin },
-      user.isAdmin ? `ถอนสิทธิ์ผู้ดูแลของ ${user.name} แล้ว` : `ตั้ง ${user.name} เป็นผู้ดูแลแล้ว`,
-    )
+    onSaved(user.isAdmin ? `ถอนสิทธิ์ผู้ดูแลของ ${user.name} แล้ว` : `ตั้ง ${user.name} เป็นผู้ดูแลแล้ว`)
   }
 
   return (
     <Modal title={`ปรับคะแนน — ${user.name}`} onClose={onClose}>
       <form onSubmit={save} className="space-y-4">
+        <Segmented
+          label="ปรับอะไร"
+          value={meter}
+          onChange={setMeter}
+          options={[
+            ['standing', 'ความประพฤติ'],
+            ['coins', 'เหรียญ'],
+          ]}
+        />
+
         <div className="rounded-2xl bg-slate-50 p-4 text-center">
-          <p className="text-sm text-slate-500">คะแนนปัจจุบัน</p>
-          <p className="text-3xl font-bold tabular-nums text-slate-800">{user.points}</p>
+          <p className="text-sm text-slate-500">{METER[meter].label}ตอนนี้</p>
+          <p className="text-3xl font-bold tabular-nums text-slate-800">{current}</p>
         </div>
 
-        <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1" role="radiogroup" aria-label="วิธีปรับคะแนน">
-          {[
+        <Segmented
+          label="วิธีปรับ"
+          value={mode}
+          onChange={setMode}
+          options={[
             ['add', 'เพิ่ม'],
             ['sub', 'ลด'],
             ['set', 'ตั้งเป็น'],
-          ].map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              role="radio"
-              aria-checked={mode === id}
-              onClick={() => setMode(id)}
-              className={`rounded-lg py-2 text-sm font-semibold transition ${
-                mode === id ? 'bg-white text-slate-800 shadow' : 'text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+          ]}
+        />
 
         <label className="block">
-          <span className="label">{mode === 'set' ? 'คะแนนใหม่' : 'จำนวนแต้ม'}</span>
+          <span className="label">{mode === 'set' ? `ค่าใหม่ (${unit})` : `จำนวน (${unit})`}</span>
           <input
             className="field"
             type="number"
             min="0"
+            max={meter === 'standing' ? 100 : undefined}
             step="1"
             inputMode="numeric"
             value={amount}
@@ -337,20 +371,20 @@ function EditPointsModal({ user, api, meId, onClose, onSaved }) {
         </label>
 
         <label className="block">
-          <span className="label">เหตุผล (เก็บไว้ในประวัติคะแนน)</span>
+          <span className="label">เหตุผล (เก็บไว้ในประวัติ ผู้ใช้เห็นด้วย)</span>
           <input
             className="field"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="เช่น ทำกิจกรรมจิตอาสา, ส่งเสียงดังในโซนเงียบ"
+            placeholder={meter === 'standing' ? 'เช่น คืนหนังสือตรงเวลา +3' : 'เช่น รางวัลกิจกรรมจิตอาสา'}
             maxLength={120}
           />
         </label>
 
         {preview !== null && (
           <p className="text-sm text-slate-600">
-            คะแนนหลังปรับ: <b className="text-slate-800">{preview}</b> แต้ม
-            {mode === 'sub' && user.points - n < 0 && ' (คะแนนไม่ติดลบ ต่ำสุดคือ 0)'}
+            หลังปรับ: <b className="text-slate-800">{preview}</b> {unit}
+            {meter === 'standing' && ' (ความประพฤติอยู่ในช่วง 0–100 · ต่ำกว่า 20 = ระงับการเข้าใช้)'}
           </p>
         )}
         {error && <p className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
@@ -382,8 +416,33 @@ function EditPointsModal({ user, api, meId, onClose, onSaved }) {
   )
 }
 
+function Segmented({ label, value, onChange, options }) {
+  return (
+    <div
+      className={`grid gap-1 rounded-xl bg-slate-100 p-1 ${options.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`}
+      role="radiogroup"
+      aria-label={label}
+    >
+      {options.map(([id, text]) => (
+        <button
+          key={id}
+          type="button"
+          role="radio"
+          aria-checked={value === id}
+          onClick={() => onChange(id)}
+          className={`rounded-lg py-2 text-sm font-semibold transition ${
+            value === id ? 'bg-white text-slate-800 shadow' : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          {text}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 // ============================================================
-//  แท็บ 2: ประวัติคะแนน
+//  แท็บ 2: ประวัติ
 // ============================================================
 function LogsTab({ api }) {
   const [source, setSource] = useState(null) // null = ทั้งหมด
@@ -412,19 +471,13 @@ function LogsTab({ api }) {
         {[
           [null, 'ทั้งหมด'],
           ['sensor', 'เซนเซอร์'],
+          ['system', 'ระบบ'],
           ['admin', 'ผู้ดูแล'],
+          ['redeem', 'แลกคูปอง'],
         ].map(([id, label]) => (
-          <button
-            key={label}
-            type="button"
-            onClick={() => setSource(id)}
-            aria-pressed={source === id}
-            className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition ${
-              source === id ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'
-            }`}
-          >
+          <Chip key={label} active={source === id} onClick={() => setSource(id)}>
             {label}
-          </button>
+          </Chip>
         ))}
         <button
           type="button"
@@ -439,35 +492,42 @@ function LogsTab({ api }) {
       {logs === null ? (
         <p className="text-sm text-slate-500">กำลังโหลด...</p>
       ) : logs.length === 0 ? (
-        <Empty>ยังไม่มีประวัติการเปลี่ยนคะแนน</Empty>
+        <Empty>ยังไม่มีประวัติ</Empty>
       ) : (
         <ul className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          {logs.map((l) => (
-            <li key={l.id} className="flex items-start gap-4 px-4 py-3">
-              <span
-                className={`w-14 shrink-0 text-right text-lg font-bold tabular-nums ${
-                  l.delta < 0 ? 'text-rose-600' : l.delta > 0 ? 'text-green-600' : 'text-slate-400'
-                }`}
-              >
-                {l.delta > 0 ? `+${l.delta}` : l.delta}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="font-medium text-slate-800">
-                  {l.name} <span className="font-normal text-slate-400">→ เหลือ {l.balanceAfter} แต้ม</span>
-                </p>
-                <p className="text-sm text-slate-600">{l.reason}</p>
-                <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
-                  <span className={`rounded-full px-2 py-0.5 font-semibold ${SOURCE[l.source]?.cls ?? ''}`}>
-                    {SOURCE[l.source]?.label ?? l.source}
-                  </span>
-                  {l.seatId && <span>{seatName(DEVICE_ZONE, l.seatId)}</span>}
-                  {l.deviceId && <span>อุปกรณ์ {l.deviceId}</span>}
-                  {l.actorName && <span>โดย {l.actorName}</span>}
-                  <span>{formatTime(l.createdAt)}</span>
-                </p>
-              </div>
-            </li>
-          ))}
+          {logs.map((l) => {
+            const meter = METER[l.meter] ?? METER.standing
+            return (
+              <li key={l.id} className="flex items-start gap-4 px-4 py-3">
+                <span
+                  className={`w-14 shrink-0 text-right text-lg font-bold tabular-nums ${
+                    l.delta < 0 ? 'text-rose-600' : l.delta > 0 ? 'text-green-600' : 'text-slate-400'
+                  }`}
+                >
+                  {l.delta > 0 ? `+${l.delta}` : l.delta}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-slate-800">
+                    {l.name}{' '}
+                    <span className="font-normal text-slate-400">
+                      → เหลือ {l.balanceAfter} {meter.unit}
+                    </span>
+                  </p>
+                  <p className="text-sm text-slate-600">{l.reason}</p>
+                  <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+                    <span className={`rounded-full px-2 py-0.5 font-semibold ${meter.cls}`}>{meter.label}</span>
+                    <span className={`rounded-full px-2 py-0.5 font-semibold ${SOURCE[l.source]?.cls ?? ''}`}>
+                      {SOURCE[l.source]?.label ?? l.source}
+                    </span>
+                    {l.seatId && <span>{seatName(DEVICE_ZONE, l.seatId)}</span>}
+                    {l.deviceId && <span>อุปกรณ์ {l.deviceId}</span>}
+                    {l.actorName && <span>โดย {l.actorName}</span>}
+                    <span>{formatTime(l.createdAt)}</span>
+                  </p>
+                </div>
+              </li>
+            )
+          })}
         </ul>
       )}
     </div>
@@ -475,7 +535,216 @@ function LogsTab({ api }) {
 }
 
 // ============================================================
-//  แท็บ 3: อุปกรณ์เซนเซอร์ (ESP32)
+//  แท็บ 3: คำอุทธรณ์ (ผู้ใช้ที่ถูกระงับยื่นมา)
+// ============================================================
+const APPEAL_STATUS = {
+  pending: { label: 'รอพิจารณา', cls: 'bg-amber-100 text-amber-800' },
+  approved: { label: 'อนุมัติแล้ว', cls: 'bg-green-100 text-green-700' },
+  rejected: { label: 'ไม่อนุมัติ', cls: 'bg-slate-100 text-slate-600' },
+}
+
+function AppealsTab({ api }) {
+  const [status, setStatus] = useState('pending')
+  const [appeals, setAppeals] = useState(null)
+  const [notes, setNotes] = useState({}) // หมายเหตุของผู้ดูแลแยกทีละเรื่อง
+  const [busy, setBusy] = useState(null)
+  const [flash, setFlash] = useFlash()
+
+  const load = useCallback(async () => {
+    const r = await api.listAppeals(status)
+    if (r.ok) setAppeals(r.data)
+    else {
+      setAppeals([])
+      setFlash({ type: 'error', text: r.message })
+    }
+  }, [api, status, setFlash])
+
+  useEffect(() => {
+    setAppeals(null)
+    load()
+  }, [load])
+
+  async function decide(a, approve) {
+    if (!window.confirm(approve ? `อนุมัติ — ยกเลิกการระงับของ ${a.name} ทันที?` : `ไม่อนุมัติ — ${a.name} ถูกระงับต่อจนครบกำหนด?`)) {
+      return
+    }
+    setBusy(a.id)
+    const r = await api.decideAppeal(a.id, approve, notes[a.id] ?? '')
+    setBusy(null)
+    setFlash(
+      r.ok
+        ? { type: 'ok', text: approve ? `อนุมัติแล้ว — ${a.name} กลับมาใช้ห้องสมุดได้ (ความประพฤติอย่างน้อย 20)` : 'บันทึกว่าไม่อนุมัติแล้ว' }
+        : { type: 'error', text: r.message },
+    )
+    load()
+  }
+
+  return (
+    <div>
+      <FlashBar flash={flash} />
+      <p className="mb-4 text-sm text-slate-500">
+        ผู้ใช้ที่ความประพฤติต่ำกว่า 20 ถูกระงับชั่วคราวและยื่นอุทธรณ์ได้ — อนุมัติ = ยกเลิกการระงับทันที (คะแนนกลับมาอย่างน้อย 20)
+      </p>
+      <div className="mb-4 flex flex-wrap gap-2">
+        {[
+          ['pending', 'รอพิจารณา'],
+          ['approved', 'อนุมัติแล้ว'],
+          ['rejected', 'ไม่อนุมัติ'],
+          [null, 'ทั้งหมด'],
+        ].map(([id, label]) => (
+          <Chip key={label} active={status === id} onClick={() => setStatus(id)}>
+            {label}
+          </Chip>
+        ))}
+      </div>
+
+      {appeals === null ? (
+        <p className="text-sm text-slate-500">กำลังโหลด...</p>
+      ) : appeals.length === 0 ? (
+        <Empty>ไม่มีคำอุทธรณ์</Empty>
+      ) : (
+        <div className="space-y-3">
+          {appeals.map((a) => (
+            <div key={a.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="font-semibold text-slate-800">{a.name}</p>
+                  <p className="text-xs text-slate-400">
+                    ยื่นเมื่อ {formatTime(a.createdAt)} · ความประพฤติ {a.points}
+                    {a.suspendedUntil && ` · ระงับถึง ${formatTime(a.suspendedUntil)}`}
+                  </p>
+                </div>
+                <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${APPEAL_STATUS[a.status].cls}`}>
+                  {APPEAL_STATUS[a.status].label}
+                </span>
+              </div>
+              <blockquote className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-700">{a.message}</blockquote>
+
+              {a.status === 'pending' ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <input
+                    className="field min-w-[12rem] flex-1 py-2"
+                    placeholder="หมายเหตุถึงผู้ใช้ (ไม่บังคับ)"
+                    value={notes[a.id] ?? ''}
+                    onChange={(e) => setNotes((n) => ({ ...n, [a.id]: e.target.value }))}
+                    maxLength={200}
+                  />
+                  <DevButton tone="green" disabled={busy === a.id} onClick={() => decide(a, true)}>
+                    <Check className="h-4 w-4" /> อนุมัติ
+                  </DevButton>
+                  <DevButton tone="rose" disabled={busy === a.id} onClick={() => decide(a, false)}>
+                    ไม่อนุมัติ
+                  </DevButton>
+                </div>
+              ) : (
+                a.adminNote && <p className="mt-2 text-sm text-slate-500">หมายเหตุ: {a.adminNote}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
+//  แท็บ 4: คูปอง — เจ้าหน้าที่กรอกรหัสที่ผู้ใช้ยื่นมา + ดูรายการที่แลกแล้ว
+// ============================================================
+function CouponsTab({ api }) {
+  const [code, setCode] = useState('')
+  const [coupons, setCoupons] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [flash, setFlash] = useFlash()
+
+  const load = useCallback(async () => {
+    const r = await api.listCoupons()
+    if (r.ok) setCoupons(r.data)
+    else {
+      setCoupons([])
+      setFlash({ type: 'error', text: r.message })
+    }
+  }, [api, setFlash])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  async function use(c) {
+    setBusy(true)
+    const r = await api.markCouponUsed(c)
+    setBusy(false)
+    setFlash(r.ok ? { type: 'ok', text: `ใช้คูปอง ${r.data.code} (${r.data.name}) แล้ว` } : { type: 'error', text: r.message })
+    if (r.ok) setCode('')
+    load()
+  }
+
+  return (
+    <div>
+      <FlashBar flash={flash} />
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (code.trim()) use(code)
+        }}
+        className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+      >
+        <h3 className="font-semibold text-slate-800">ใช้คูปอง</h3>
+        <p className="mt-1 text-sm text-slate-500">กรอกรหัสที่ผู้ใช้ยื่นมา (เช่น LB-1A2B3C4D) — ใช้แล้วใช้ซ้ำไม่ได้</p>
+        <div className="mt-3 flex gap-2">
+          <input
+            className="field font-mono uppercase tracking-wider"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="LB-XXXXXXXX"
+            aria-label="รหัสคูปอง"
+          />
+          <button
+            type="submit"
+            disabled={busy || !code.trim()}
+            className="shrink-0 rounded-xl bg-slate-800 px-5 font-semibold text-white transition hover:bg-slate-900 disabled:opacity-60"
+          >
+            ใช้คูปอง
+          </button>
+        </div>
+      </form>
+
+      <p className="mt-5 text-xs text-slate-400">ชื่อ/ราคาคูปองแก้ได้ที่ตาราง coupon_catalog ใน Supabase (ตอนนี้ 50 / 100 / 200 เหรียญ)</p>
+      <div className="mt-2">
+        {coupons === null ? (
+          <p className="text-sm text-slate-500">กำลังโหลด...</p>
+        ) : coupons.length === 0 ? (
+          <Empty>ยังไม่มีใครแลกคูปอง</Empty>
+        ) : (
+          <ul className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            {coupons.map((c) => (
+              <li key={c.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="font-mono font-bold tracking-wider text-slate-800">{c.code}</p>
+                  <p className="text-sm text-slate-500">
+                    {c.name} · {c.cost} เหรียญ · {c.userName} · {formatTime(c.createdAt)}
+                  </p>
+                </div>
+                {c.status === 'used' ? (
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
+                    ใช้แล้ว {c.usedAt && formatTime(c.usedAt)}
+                  </span>
+                ) : (
+                  <DevButton tone="green" disabled={busy} onClick={() => use(c.code)}>
+                    <Check className="h-4 w-4" /> ใช้คูปองนี้
+                  </DevButton>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ============================================================
+//  แท็บ 5: อุปกรณ์เซนเซอร์ (ESP32)
 // ============================================================
 function DevicesTab({ api }) {
   const [devices, setDevices] = useState(null)
@@ -543,7 +812,7 @@ function DevicesTab({ api }) {
       d.active &&
       !window.confirm(
         `ตัดการเชื่อมต่อ ${label(d)} กับเว็บ?\n` +
-          'บอร์ดจะหยุดเฝ้าเสียงและไม่หักแต้มใคร (ภายใน 30 วินาที)\n' +
+          'บอร์ดจะหยุดเฝ้าเสียงและไม่หักคะแนนใคร (ภายใน 30 วินาที)\n' +
           'กด "เชื่อมต่ออีกครั้ง" ได้ทุกเมื่อ ไม่ต้องแก้โค้ดบนบอร์ด',
       )
     ) {
@@ -595,7 +864,7 @@ function DevicesTab({ api }) {
             <b>เชื่อมต่อ:</b> เพิ่มอุปกรณ์ (เลือกโต๊ะ) → เอาคีย์ไปใส่ในส่วนที่ 1 ของ main.py บนบอร์ด (ทำครั้งเดียว)
           </li>
           <li>
-            <b>หยุดทดสอบชั่วคราว:</b> กด “ตัดการเชื่อมต่อ” — บอร์ดหยุดเฝ้าเสียง ไม่หักแต้ม กลับมาเชื่อมใหม่ได้ ไม่ต้องแก้โค้ด
+            <b>หยุดทดสอบชั่วคราว:</b> กด “ตัดการเชื่อมต่อ” — บอร์ดหยุดเฝ้าเสียง ไม่หักคะแนน กลับมาเชื่อมใหม่ได้ ไม่ต้องแก้โค้ด
           </li>
           <li>
             <b>ย้ายไปโต๊ะอื่น:</b> กด “ย้ายโต๊ะ” — ใช้คีย์เดิม ไม่ต้องแก้โค้ด
@@ -610,7 +879,7 @@ function DevicesTab({ api }) {
       <form onSubmit={create} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="font-semibold text-slate-800">เพิ่มอุปกรณ์ ESP32</h3>
         <p className="mt-1 text-sm text-slate-500">
-          1 อุปกรณ์ = 1 ที่นั่ง — ตรวจพบเสียงดังเมื่อไร ระบบจะหักแต้มทุกคนที่จองที่นั่งนั้นอยู่ในเวลานั้น
+          1 อุปกรณ์ = 1 ที่นั่ง — บอร์ดส่งมาเมื่อเสียงดังตั้งแต่ครั้งที่ 3 ระบบหักความประพฤติทุกคนที่จองที่นั่งนั้นอยู่
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
           <input
@@ -661,14 +930,14 @@ function DevicesTab({ api }) {
 
                 {!d.active && (
                   <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                    ตัดการเชื่อมต่ออยู่ — บอร์ดไม่เฝ้าเสียงและไม่หักแต้มใคร (จอบอร์ดขึ้น OFF)
+                    ตัดการเชื่อมต่ออยู่ — บอร์ดไม่เฝ้าเสียงและไม่หักคะแนนใคร (จอบอร์ดขึ้น OFF)
                   </p>
                 )}
 
                 <dl className="mt-3 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
                   <Stat label="ติดต่อล่าสุด" value={d.lastSeenAt ? ago(d.lastSeenAt) : 'ยังไม่เคย'} />
                   <Stat label="ระดับเสียงล่าสุด" value={d.lastLevel != null ? `${d.lastLevel} dB` : '–'} />
-                  <Stat label="หักแต้มล่าสุด" value={d.lastPenaltyAt ? ago(d.lastPenaltyAt) : '–'} />
+                  <Stat label="หักคะแนนล่าสุด" value={d.lastPenaltyAt ? ago(d.lastPenaltyAt) : '–'} />
                 </dl>
 
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -839,8 +1108,41 @@ function KeyModal({ info, onClose }) {
 }
 
 // ============================================================
-//  แท็บ 4: ตั้งค่า
+//  แท็บ 6: ตั้งค่า
 // ============================================================
+// [ชื่อช่อง, ข้อความ, หน่วย, คำอธิบาย]
+const SETTING_GROUPS = [
+  {
+    title: 'หักความประพฤติ (จากเซนเซอร์)',
+    fields: [
+      ['noisePenalty', 'หักครั้งแรกของวัน', 'คะแนน', 'บอร์ดส่งมาเมื่อเสียงดังตั้งแต่ครั้งที่ 3 · หักทุกคนในการจองโต๊ะนั้น'],
+      ['penaltyStep', 'ครั้งต่อไปหักแรงขึ้นครั้งละ', 'คะแนน'],
+      ['penaltyMax', 'เพดานต่อครั้ง', 'คะแนน'],
+      ['dailyCap', 'หักรวมสูงสุดต่อวัน', 'คะแนน', 'กันหน้าผา “ไม่มีอะไรจะเสีย” — พลาดวันเดียวไม่ถึงขั้นโดนตัดสิทธิ์'],
+      ['cooldownSeconds', 'ช่วงพักหลังหัก', 'วินาที', 'กันบอร์ดส่งซ้ำรัว ๆ — บอร์ดนับครั้งละ 5 วินาทีเอง จึงไม่ควรเกิน 5'],
+      ['suspendDays', 'ต่ำกว่า 20 ระงับการเข้าใช้', 'วัน'],
+    ],
+  },
+  {
+    title: 'ได้ความประพฤติคืน',
+    fields: [
+      ['refundMinutes', 'เงียบต่อหลังโดนหักกี่นาทีถึงคืน', 'นาที'],
+      ['refundPercent', 'คืนกี่ %', '%'],
+      ['sessionBonus', 'จบการจองแบบเงียบ', 'คะแนน', 'วันละครั้ง ต้องเช็คอินที่โต๊ะ'],
+      ['weeklyBonus', 'ไม่ทำผิดครบ 1 สัปดาห์', 'คะแนน'],
+      ['startingPoints', 'ความประพฤติเริ่มต้น', 'คะแนน', 'ใช้กับบัญชีใหม่ และตอนกดรีเซ็ต (สูงสุด 100)'],
+    ],
+  },
+  {
+    title: 'เหรียญรางวัล',
+    fields: [
+      ['sessionCoins', 'จบการจองแบบเงียบ', 'เหรียญ'],
+      ['coinGate', 'ได้เหรียญเฉพาะตอนความประพฤติ ≥', 'คะแนน'],
+    ],
+  },
+]
+const SETTING_KEYS = SETTING_GROUPS.flatMap((g) => g.fields.map(([key]) => key))
+
 function SettingsTab({ api }) {
   const [saved, setSaved] = useState(null) // ค่าที่บันทึกอยู่ในระบบ
   const [form, setForm] = useState(null) // ค่าที่กำลังแก้ (เก็บเป็นข้อความตามช่องกรอก)
@@ -850,9 +1152,7 @@ function SettingsTab({ api }) {
   const applySaved = useCallback((s) => {
     setSaved(s)
     setForm({
-      startingPoints: String(s.startingPoints),
-      noisePenalty: String(s.noisePenalty),
-      cooldownSeconds: String(s.cooldownSeconds),
+      ...Object.fromEntries(SETTING_KEYS.map((k) => [k, String(s[k] ?? '')])),
       sensorEnabled: s.sensorEnabled,
     })
   }, [])
@@ -865,19 +1165,14 @@ function SettingsTab({ api }) {
     })()
   }, [api, applySaved, setFlash])
 
-  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
   const toInt = (v) => (/^\d+$/.test(String(v).trim()) ? Number(v) : NaN)
 
   async function save(e) {
     e.preventDefault()
-    const next = {
-      startingPoints: toInt(form.startingPoints),
-      noisePenalty: toInt(form.noisePenalty),
-      cooldownSeconds: toInt(form.cooldownSeconds),
-      sensorEnabled: form.sensorEnabled,
-    }
-    if ([next.startingPoints, next.noisePenalty, next.cooldownSeconds].some(Number.isNaN)) {
-      return setFlash({ type: 'error', text: 'กรอกเป็นเลขจำนวนเต็มตั้งแต่ 0 ขึ้นไป' })
+    const next = { sensorEnabled: form.sensorEnabled }
+    for (const k of SETTING_KEYS) next[k] = toInt(form[k])
+    if (SETTING_KEYS.some((k) => Number.isNaN(next[k]))) {
+      return setFlash({ type: 'error', text: 'กรอกเป็นเลขจำนวนเต็มตั้งแต่ 0 ขึ้นไปทุกช่อง' })
     }
     setBusy(true)
     const r = await api.updateSettings(next)
@@ -888,11 +1183,17 @@ function SettingsTab({ api }) {
   }
 
   async function resetAll() {
-    if (!window.confirm(`รีเซ็ตคะแนนของทุกคนเป็น ${saved.startingPoints} แต้ม?\nย้อนกลับไม่ได้ (ประวัติเดิมยังเก็บไว้)`)) return
+    if (
+      !window.confirm(
+        `รีเซ็ตความประพฤติของทุกคนเป็น ${saved.startingPoints} และยกเลิกการระงับทั้งหมด?\n(เหรียญไม่เปลี่ยน · ย้อนกลับไม่ได้ · ประวัติเดิมยังเก็บไว้)`,
+      )
+    ) {
+      return
+    }
     setBusy(true)
-    const r = await api.resetAll('รีเซ็ตคะแนนทุกคน')
+    const r = await api.resetAll('รีเซ็ตความประพฤติทุกคน')
     setBusy(false)
-    setFlash(r.ok ? { type: 'ok', text: `รีเซ็ตแล้ว — เปลี่ยนคะแนน ${r.data} คน` } : { type: 'error', text: r.message })
+    setFlash(r.ok ? { type: 'ok', text: `รีเซ็ตแล้ว — เปลี่ยน ${r.data} คน` } : { type: 'error', text: r.message })
   }
 
   if (!form) {
@@ -908,44 +1209,47 @@ function SettingsTab({ api }) {
     <div className="space-y-6">
       <FlashBar flash={flash} />
 
-      <form onSubmit={save} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="font-semibold text-slate-800">ตั้งค่าคะแนนและเซนเซอร์</h3>
+      <form onSubmit={save} className="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <Toggle
           checked={form.sensorEnabled}
           onChange={(v) => setForm((f) => ({ ...f, sensorEnabled: v }))}
-          label="หักแต้มเมื่อเซนเซอร์ตรวจพบเสียงดัง"
-          hint="ปิดไว้ = เซนเซอร์ยังส่งข้อมูลได้ แต่ระบบจะไม่หักแต้มใคร"
+          label="หักความประพฤติเมื่อเซนเซอร์ตรวจพบเสียงดัง"
+          hint="ปิดไว้ = เซนเซอร์ยังส่งข้อมูลได้ แต่ระบบจะไม่หักคะแนนใคร"
         />
-        <NumberField
-          label="หักแต้มต่อการตรวจพบ 1 ครั้ง"
-          unit="แต้ม"
-          value={form.noisePenalty}
-          onChange={set('noisePenalty')}
-          hint="หักทุกคนในการจองโต๊ะนั้น (คนจอง + เพื่อนที่เข้าร่วมด้วย QR)"
-        />
-        <NumberField
-          label="ช่วงพักหลังหักแต้ม"
-          unit="วินาที"
-          value={form.cooldownSeconds}
-          onChange={set('cooldownSeconds')}
-          hint="กันบอร์ดส่งซ้ำรัว ๆ (นับแยกทีละอุปกรณ์) — บอร์ดนับเสียงดังครั้งละ 5 วินาทีเอง จึงควรตั้งไม่เกิน 5"
-        />
-        <NumberField
-          label="คะแนนเริ่มต้น"
-          unit="แต้ม"
-          value={form.startingPoints}
-          onChange={set('startingPoints')}
-          hint="ใช้กับบัญชีใหม่ และตอนกดรีเซ็ตคะแนนทุกคน"
-        />
+
+        {SETTING_GROUPS.map((g) => (
+          <fieldset key={g.title} className="space-y-3">
+            <legend className="mb-2 font-semibold text-slate-800">{g.title}</legend>
+            <div className="grid gap-4 sm:grid-cols-2">
+              {g.fields.map(([key, label, unit, hint]) => (
+                <NumberField
+                  key={key}
+                  label={label}
+                  unit={unit}
+                  hint={hint}
+                  value={form[key]}
+                  onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                />
+              ))}
+            </div>
+          </fieldset>
+        ))}
+
+        <p className="rounded-xl bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
+          โบนัสเงียบติดต่อกัน 7 / 14 / 30 วัน = +10 / +20 / +50 เหรียญ (ทุก ๆ 30 วันต่อจากนั้น +50) · ช่วงระดับสิทธิ์ 80 / 60 / 40 / 20
+          คงที่ตามบันไดบทลงโทษ
+        </p>
+
         <button type="submit" disabled={busy} className="btn-primary">
           บันทึกการตั้งค่า
         </button>
       </form>
 
       <div className="rounded-2xl border border-rose-200 bg-white p-5 shadow-sm">
-        <h3 className="font-semibold text-rose-700">รีเซ็ตคะแนนทุกคน</h3>
+        <h3 className="font-semibold text-rose-700">รีเซ็ตความประพฤติทุกคน</h3>
         <p className="mt-1 text-sm text-slate-500">
-          ตั้งคะแนนของผู้ใช้ทุกคนกลับเป็น {saved.startingPoints} แต้ม เช่นตอนเริ่มภาคเรียนใหม่ — ประวัติเดิมยังเก็บไว้
+          ตั้งความประพฤติของผู้ใช้ทุกคนกลับเป็น {saved.startingPoints} และยกเลิกการระงับ เช่นตอนเริ่มภาคเรียนใหม่ — เหรียญไม่เปลี่ยน
+          ประวัติเดิมยังเก็บไว้
         </p>
         <button
           type="button"
@@ -953,7 +1257,7 @@ function SettingsTab({ api }) {
           disabled={busy}
           className="mt-4 rounded-xl border border-rose-300 px-4 py-2.5 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 disabled:opacity-60"
         >
-          รีเซ็ตคะแนนทุกคน
+          รีเซ็ตความประพฤติทุกคน
         </button>
       </div>
     </div>
@@ -965,7 +1269,7 @@ function NumberField({ label, unit, value, onChange, hint }) {
     <label className="block">
       <span className="label">{label}</span>
       <span className="flex items-center gap-2">
-        <input className="field max-w-[10rem]" type="number" min="0" step="1" inputMode="numeric" value={value} onChange={onChange} />
+        <input className="field max-w-[8rem]" type="number" min="0" step="1" inputMode="numeric" value={value} onChange={onChange} />
         <span className="text-sm text-slate-500">{unit}</span>
       </span>
       {hint && <span className="mt-1 block text-xs text-slate-400">{hint}</span>}
@@ -1022,6 +1326,21 @@ function FlashBar({ flash }) {
     <div role="status" className={`mb-4 rounded-xl border px-4 py-3 text-sm ${FLASH_CLS[flash.type]}`}>
       {flash.text}
     </div>
+  )
+}
+
+function Chip({ active, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition ${
+        active ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'
+      }`}
+    >
+      {children}
+    </button>
   )
 }
 

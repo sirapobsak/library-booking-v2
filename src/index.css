@@ -19,8 +19,29 @@
   .label {
     @apply mb-1.5 block text-sm font-medium text-slate-700;
   }
+  /* ไฟสถิติ "เงียบติดต่อกัน" — ไหววูบวาบเบา ๆ (ปิดเองถ้าผู้ใช้ตั้งลดการเคลื่อนไหว) */
+  .flame-flicker {
+    animation: flame-flicker 1.8s ease-in-out infinite;
+    transform-origin: 50% 85%;
+  }
   .btn-primary {
     @apply w-full rounded-xl bg-sky-600 px-4 py-3 font-semibold text-white transition
            hover:bg-sky-700 active:scale-[.99] disabled:cursor-not-allowed disabled:opacity-60;
+  }
+}
+
+@keyframes flame-flicker {
+  0%,
+  100% {
+    transform: scale(1) rotate(-2deg);
+  }
+  50% {
+    transform: scale(1.07) rotate(2deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flame-flicker {
+    animation: none;
   }
 }
