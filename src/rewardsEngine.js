@@ -120,6 +120,7 @@ export function normalize(raw = {}) {
     sessions: raw.sessions ?? [],
     appeals: raw.appeals ?? [],
     coupons: raw.coupons ?? [],
+    noiseEvents: raw.noiseEvents ?? [], // เสียงดังแต่ละครั้ง (จอทีวี)
   }
 }
 
@@ -333,6 +334,16 @@ export function applyNoise(d, deviceId, level, bookings, now) {
     return amount
   })
   dev.lastPenaltyAt = new Date(now).toISOString()
+  // เก็บไว้ให้จอทีวี (ตามองไปที่โต๊ะนี้ + นับสถิติ)
+  d.noiseEvents.push({
+    id: `${now}-${randomHex(3)}`,
+    zoneId: dev.zoneId,
+    seatId: dev.seatId,
+    deviceId: dev.id,
+    level: level ?? null,
+    at: new Date(now).toISOString(),
+  })
+  d.noiseEvents = d.noiseEvents.slice(-5000)
   const max = Math.max(...amounts)
   if (max === 0) return { ok: true, status: 'DAILY_CAP', users: amounts.length }
   return { ok: true, status: 'DEDUCTED', users: amounts.length, penalty: max, penalty_min: Math.min(...amounts) }
@@ -427,6 +438,46 @@ export function bookingRestriction(d, uid, seatId, bookings, now) {
   if (level === 'suspended') return 'SUSPENDED'
   if ((level === 'limit1' || level === 'limit2') && /^R\d+$/.test(seatId)) return 'RESTRICTED_ROOM'
   return null
+}
+
+// ============================================================
+//  จอทีวีในโซน (หน้าตาเดียวกับ get_tv_state ใน SQL) — ไม่มีข้อมูลว่าใครนั่ง
+// ============================================================
+export function tvState(d, zoneId, bookings, now) {
+  const DAY = 24 * 3600 * 1000
+  const events = d.noiseEvents.filter((e) => e.zoneId === zoneId)
+  const today = dayOf(now)
+  const yesterday = dayOf(now - DAY)
+  const minuteOfDay = (t) => {
+    const x = new Date(t)
+    return x.getHours() * 60 + x.getMinutes() + x.getSeconds() / 60
+  }
+  const on = (day) => events.filter((e) => dayOf(e.at) === day)
+  const byHour = (list) => {
+    const h = Array(24).fill(0)
+    list.forEach((e) => h[new Date(e.at).getHours()]++)
+    return h
+  }
+  const nowMinute = minuteOfDay(now)
+  return {
+    now: new Date(now).toISOString(),
+    today: on(today).length,
+    yesterday: on(yesterday).length,
+    yesterdaySoFar: on(yesterday).filter((e) => minuteOfDay(e.at) <= nowMinute).length,
+    hoursToday: byHour(on(today)),
+    hoursYesterday: byHour(on(yesterday)),
+    days: Array.from({ length: 7 }, (_, i) => {
+      const date = dayOf(now - (6 - i) * DAY)
+      return { date, count: on(date).length }
+    }),
+    lastEventAt: events.length ? events.reduce((a, e) => (e.at > a ? e.at : a), events[0].at) : null,
+    recent: events
+      .filter((e) => now - Date.parse(e.at) <= 2 * MIN_MS)
+      .sort((a, b) => b.at.localeCompare(a.at))
+      .map((e) => ({ id: e.id, seatId: e.seatId, at: e.at, level: e.level })),
+    sensorSeats: [...new Set(d.devices.filter((x) => x.zoneId === zoneId && x.active).map((x) => x.seatId))],
+    bookedNow: bookings.filter((b) => b.zoneId === zoneId && bookingStart(b) <= now && now < bookingEnd(b)).length,
+  }
 }
 
 // ============================================================

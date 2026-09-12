@@ -163,6 +163,17 @@ create table if not exists public.user_coupons (
   used_at    timestamptz
 );
 
+-- เสียงดังที่เซนเซอร์ตรวจพบแต่ละครั้ง (ใช้ในจอทีวี: ตามองไปที่โต๊ะ + สถิติวันนี้/เมื่อวาน) — ไม่มีข้อมูลว่าใครนั่ง
+create table if not exists public.noise_events (
+  id         bigint generated always as identity primary key,
+  zone_id    text not null,
+  seat_id    text not null,
+  device_id  text,
+  level      int,
+  created_at timestamptz not null default now()
+);
+create index if not exists noise_events_zone_idx on public.noise_events (zone_id, created_at desc);
+
 -- อุปกรณ์ ESP32 (1 ตัว = 1 ที่นั่ง)
 create table if not exists public.noise_devices (
   id              text primary key check (id ~ '^[A-Za-z0-9_-]{3,40}$'),
@@ -189,6 +200,7 @@ alter table public.standing_appeals enable row level security;
 alter table public.coupon_catalog   enable row level security;
 alter table public.user_coupons     enable row level security;
 alter table public.noise_devices    enable row level security;
+alter table public.noise_events     enable row level security;
 
 drop policy if exists "read own points" on public.user_points;
 create policy "read own points" on public.user_points
@@ -1019,6 +1031,8 @@ begin
   end loop;
 
   update public.noise_devices set last_penalty_at = now() where id = d.id;
+  -- เก็บไว้ให้จอทีวี (ตามองไปที่โต๊ะนี้ + นับสถิติ)
+  insert into public.noise_events (zone_id, seat_id, device_id, level) values (d.zone_id, d.seat_id, d.id, p_level);
   if v_max = 0 then  -- ทุกคนโดนหักครบยอดสูงสุดของวันแล้ว
     return jsonb_build_object('ok', true, 'status', 'DAILY_CAP', 'users', v_count);
   end if;
@@ -1091,6 +1105,54 @@ begin
   );
 end $$;
 
+-- จอทีวีในโซน (เปิดได้โดยไม่ต้องล็อกอิน) — คืนแค่ "โต๊ะไหน/เมื่อไร/กี่ครั้ง" ไม่มีชื่อหรือข้อมูลของผู้ใช้
+--   recent = เสียงดังใน 2 นาทีล่าสุด (ตามองไปที่โต๊ะนั้น), today / yesterday / yesterdaySoFar = สถิติแข่งกับเมื่อวาน
+create or replace function public.get_tv_state(p_zone text default 'quiet')
+returns jsonb language plpgsql security definer set search_path = public stable as $$
+declare
+  v_now   timestamp := public._bkk_now();
+  v_today date := public._bkk_now()::date;
+begin
+  return jsonb_build_object(
+    'now', now(),
+    'today', (select count(*) from public.noise_events e
+               where e.zone_id = p_zone and (e.created_at at time zone 'Asia/Bangkok')::date = v_today),
+    'yesterday', (select count(*) from public.noise_events e
+                   where e.zone_id = p_zone and (e.created_at at time zone 'Asia/Bangkok')::date = v_today - 1),
+    -- เมื่อวาน "ถึงเวลาเดียวกับตอนนี้" (เทียบกันแฟร์ ๆ ระหว่างวัน)
+    'yesterdaySoFar', (select count(*) from public.noise_events e
+                        where e.zone_id = p_zone and (e.created_at at time zone 'Asia/Bangkok')::date = v_today - 1
+                          and (e.created_at at time zone 'Asia/Bangkok')::time <= v_now::time),
+    'hoursToday', (select jsonb_agg(coalesce(x.n, 0) order by h.h)
+                     from generate_series(0, 23) h(h)
+                     left join (select extract(hour from e.created_at at time zone 'Asia/Bangkok')::int hr, count(*)::int n
+                                  from public.noise_events e
+                                 where e.zone_id = p_zone and (e.created_at at time zone 'Asia/Bangkok')::date = v_today
+                                 group by 1) x on x.hr = h.h),
+    'hoursYesterday', (select jsonb_agg(coalesce(x.n, 0) order by h.h)
+                         from generate_series(0, 23) h(h)
+                         left join (select extract(hour from e.created_at at time zone 'Asia/Bangkok')::int hr, count(*)::int n
+                                      from public.noise_events e
+                                     where e.zone_id = p_zone and (e.created_at at time zone 'Asia/Bangkok')::date = v_today - 1
+                                     group by 1) x on x.hr = h.h),
+    'days', (select jsonb_agg(jsonb_build_object('date', to_char(g.d, 'YYYY-MM-DD'), 'count',
+                                (select count(*) from public.noise_events e
+                                  where e.zone_id = p_zone and (e.created_at at time zone 'Asia/Bangkok')::date = g.d::date))
+                              order by g.d)
+               from generate_series((v_today - 6)::timestamp, v_today::timestamp, interval '1 day') g(d)),
+    'lastEventAt', (select max(e.created_at) from public.noise_events e where e.zone_id = p_zone),
+    'recent', (select coalesce(jsonb_agg(jsonb_build_object('id', e.id, 'seatId', e.seat_id, 'at', e.created_at,
+                                                            'level', e.level) order by e.created_at desc, e.id desc), '[]'::jsonb)
+                 from public.noise_events e
+                where e.zone_id = p_zone and e.created_at > now() - interval '2 minutes'),
+    'sensorSeats', (select coalesce(jsonb_agg(distinct d.seat_id), '[]'::jsonb)
+                      from public.noise_devices d where d.zone_id = p_zone and d.active),
+    'bookedNow', (select count(*) from public.seat_bookings b
+                   where b.zone_id = p_zone and b.booking_date + b.start_time <= v_now
+                     and v_now < b.booking_date + b.end_time)
+  );
+end $$;
+
 -- ผู้ดูแลกด "จำลองเสียงดัง" จากหน้าเว็บ — ใช้ทดสอบระบบก่อนมีบอร์ดจริง
 create or replace function public.admin_simulate_noise(p_id text)
 returns jsonb language plpgsql security definer set search_path = public as $$
@@ -1145,6 +1207,10 @@ revoke all on function public.report_noise(text, text, integer)     from public;
 revoke all on function public.device_heartbeat(text, text, integer) from public;
 grant execute on function public.report_noise(text, text, integer)     to anon, authenticated;
 grant execute on function public.device_heartbeat(text, text, integer) to anon, authenticated;
+
+-- จอทีวี (ไม่ต้องล็อกอิน — ข้อมูลเป็นแค่จำนวนครั้ง/ตำแหน่งโต๊ะ)
+revoke all on function public.get_tv_state(text) from public;
+grant execute on function public.get_tv_state(text) to anon, authenticated;
 
 -- ============================================================
 --  ตั้ง "ผู้ดูแลคนแรก" — เปลี่ยนอีเมลเป็นบัญชีที่ใช้ล็อกอินเว็บ แล้วลบ -- หน้าบรรทัดล่างออกก่อนรัน

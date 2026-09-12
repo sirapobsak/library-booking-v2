@@ -4,11 +4,25 @@ import AdminPage from './pages/AdminPage.jsx'
 import AuthPage from './pages/AuthPage.jsx'
 import JoinPage from './pages/JoinPage.jsx'
 import MyPoints from './pages/MyPoints.jsx'
+import TvPage from './pages/TvPage.jsx'
 import Zones from './pages/Zones.jsx'
 import ZonePage from './pages/ZonePage.jsx'
 
 export default function App() {
   const { user, loading } = useAuth()
+  const location = useLocation()
+
+  // จอทีวีในโซน — เปิดค้างบนทีวีได้โดยไม่ต้องล็อกอิน
+  if (location.pathname.startsWith('/tv')) {
+    return (
+      <Routes>
+        <Route path="/tv" element={<TvPage mode="eye" />} /> {/* ตามองรอบห้อง */}
+        <Route path="/tv/stats" element={<TvPage mode="stats" />} /> {/* สถิติ วันนี้ vs เมื่อวาน */}
+        <Route path="/tv/auto" element={<TvPage mode="auto" />} /> {/* สลับ 2 หน้าเอง */}
+        <Route path="*" element={<Navigate to="/tv" replace />} />
+      </Routes>
+    )
+  }
 
   // ระหว่างเช็คว่าเคยล็อกอินค้างไว้ไหม ให้แสดงหน้ารอสั้น ๆ กันจอกระพริบ
   if (loading) {

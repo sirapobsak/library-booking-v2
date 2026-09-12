@@ -9,6 +9,7 @@ import {
   Flame,
   History,
   KeyRound,
+  MonitorPlay,
   Plug,
   RefreshCw,
   Scale,
@@ -133,7 +134,7 @@ export default function AdminPage() {
     <div className="min-h-screen bg-slate-50">
       <Header />
       <main className="mx-auto max-w-5xl px-5 py-10">
-        <div className="mb-6 flex items-center gap-3">
+        <div className="mb-6 flex flex-wrap items-center gap-3">
           <span className="grid h-12 w-12 place-items-center rounded-2xl bg-sky-100 text-sky-700">
             <ShieldCheck className="h-6 w-6" />
           </span>
@@ -141,6 +142,16 @@ export default function AdminPage() {
             <h1 className="text-2xl font-bold text-slate-800">ผู้ดูแลระบบ</h1>
             <p className="text-sm text-slate-500">จัดการคะแนนความประพฤติ เหรียญ คูปอง และเซนเซอร์ตรวจจับเสียง</p>
           </div>
+          {/* จอทีวีในโซน — เปิดแท็บใหม่ แล้วลากไปไว้บนจอทีวี (ไม่ต้องล็อกอิน) */}
+          <a
+            href="#/tv/auto"
+            target="_blank"
+            rel="noreferrer"
+            className="ml-auto flex items-center gap-2 rounded-xl bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-900"
+          >
+            <MonitorPlay className="h-4 w-4" />
+            เปิดหน้าจอทีวี
+          </a>
         </div>
         {body}
       </main>

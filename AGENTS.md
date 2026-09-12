@@ -89,6 +89,7 @@ src/
 ├─ data.js                     ⭐ ข้อมูล 3 โซน (id, ชื่อ, คำอธิบาย, ไอคอน, สี)
 ├─ points.js                   ⭐ คะแนนสะสม: useMyPoints() (Header) / useMyRewards() (หน้า /points + เช็คอิน/แลกคูปอง/อุทธรณ์) / usePointsAdmin()
 ├─ rewardsEngine.js            ⭐ กติกาคะแนน 2 มิเตอร์แบบ JS ล้วน (โหมดทดลอง) — **ต้องทำงานเหมือน points.sql ทุกข้อ** แก้ที่หนึ่งต้องแก้อีกที่
+├─ tv.js                       ข้อมูลจอทีวี: useTvState() (ถามทุก 3 วิ), useNoiseAlert(), เวลาเงียบต่อเนื่อง
 ├─ bookings.js                 ⭐ ระบบจอง dual-mode: useBookingApi() / useZoneBookings(zoneId) — Supabase RPC หรือ localStorage
 ├─ layouts/
 │  ├─ quietZone.js             ⭐ พิกัดที่นั่งทุกจุดของโซนเงียบ (พิกัดพิกเซลบนรูปแปลน 1656x1242)
@@ -106,7 +107,9 @@ src/
    ├─ ZonePage.jsx             /zone/:zoneId — โซนเงียบโชว์ผัง โซนอื่นเป็น placeholder
    ├─ JoinPage.jsx             /join, /join/:code — เข้าร่วมโต๊ะด้วยรหัส (ลิงก์ใน QR ชี้มาที่นี่)
    ├─ MyPoints.jsx             /points — ไฟเงียบติดต่อกัน (บนสุดตรงกลาง), ความประพฤติ, เหรียญ, การจองวันนี้+เช็คอิน, แลกคูปอง, อุทธรณ์, กติกา, ประวัติ
-   └─ AdminPage.jsx            /admin — แท็บ ผู้ใช้&คะแนน / ประวัติ / คำอุทธรณ์ / คูปอง / อุปกรณ์เซนเซอร์ / ตั้งค่า
+   ├─ AdminPage.jsx            /admin — แท็บ ผู้ใช้&คะแนน / ประวัติ / คำอุทธรณ์ / คูปอง / อุปกรณ์เซนเซอร์ / ตั้งค่า (+ ปุ่มเปิดหน้าจอทีวี)
+   └─ TvPage.jsx               /tv (ตา) · /tv/stats (สถิติ) · /tv/auto (สลับเอง) — จอทีวีในโซน **ไม่ต้องล็อกอิน** (App.jsx เช็คก่อนด่านล็อกอิน)
+      (ชิ้นส่วนอยู่ใน components/tv/EyeView.jsx + StatsView.jsx, ข้อมูลจาก src/tv.js)
 supabase/
 ├─ schema.sql                  SQL สร้างตาราง profiles + trigger + get_email_by_phone
 ├─ points.sql                  คะแนน 2 มิเตอร์ + เช็คอิน + คูปอง + อุทธรณ์ + ผู้ดูแล + อุปกรณ์ ESP32 + RPC (รันหลัง bookings.sql)
@@ -162,6 +165,14 @@ supabase/
 - โหมดทดลอง (`npm run dev:mock`): `points.js` ใช้ `rewardsEngine.js` เลียนแบบฟังก์ชัน SQL ใน localStorage และทุกบัญชีเป็นผู้ดูแล — **ห้ามให้โหมดนี้ทำงานบนเว็บจริงที่มี Supabase**
 - ทดสอบ SQL ได้จริงในเครื่องด้วย **PGlite** (`@electric-sql/pglite` + contrib `pgcrypto`/`btree_gist`, สร้าง `auth.users` + `auth.uid()` จำลอง)
   รัน schema.sql → bookings.sql → points.sql แล้วเรียก RPC ตรง ๆ — เลื่อนเวลาด้วยการแก้ `created_at`/`ends_at` ในตาราง
+
+### จอทีวีในโซน (`#/tv`)
+- ทุกครั้งที่ `_apply_noise()` หักคะแนนได้ (DEDUCTED หรือ DAILY_CAP) จะเพิ่มแถวใน `noise_events` (โต๊ะ + เวลา ไม่มีข้อมูลผู้ใช้)
+- ทีวีเรียก `get_tv_state(zone)` ทุก 3 วิ — **anon เรียกได้** (ไม่มีข้อมูลส่วนตัว ห้ามเพิ่มชื่อ/อีเมลลงไป) — โหมดทดลองใช้ `tvState()` ใน rewardsEngine
+- ตา: เสียงดังใน 15 วิล่าสุด (`ALERT_MS`) -> ตาหันไปทิศของโต๊ะ "บนแปลน" (ตำแหน่งจาก quietZone.js) + ขอบจอแดง (`.tv-alarm`) + แผนผังเล็กมุมจอ
+  ไม่มีเสียงดัง -> กลอกตามองรอบห้องเอง + กะพริบ (ปิดเองถ้าเครื่องตั้งลดการเคลื่อนไหว)
+- สถิติ: วันนี้ vs "เมื่อวานถึงเวลาเดียวกัน" (แฟร์ระหว่างวัน) + ทั้งวันเมื่อวาน + รายชั่วโมง + 7 วัน — สีตาม dataviz palette โหมดมืด (ตรวจ CVD แล้ว)
+- ตอนนี้บอร์ดส่งมาเฉพาะครั้งที่ 3 ขึ้นไป (ครั้งที่โดนหัก) ตาจึงหันหลังเสียงดังสะสมครบ 3 รอบ — ถ้าจะให้หันตั้งแต่ครั้งที่ 1 ต้องให้บอร์ดส่ง event เพิ่ม
 
 ### เพิ่มโซนใหม่ / เพิ่มผังให้โซนอื่น
 1. เพิ่ม object ใน `ZONES` ที่ `src/data.js` (ต้องมีสีใน `ACCENT` ด้วย — Tailwind ต้องเห็นชื่อคลาสเต็ม ๆ)
