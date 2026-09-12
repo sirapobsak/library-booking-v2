@@ -4,15 +4,27 @@ import { CANVAS, QUIET_SEATS } from '../../layouts/quietZone.js'
 import { formatQuiet, quietFor } from '../../tv.js'
 
 // ============================================================
-//  หน้าตา: ตากลอกมองไปรอบ ๆ ห้องเอง + กะพริบตา
-//  เซนเซอร์ตรวจพบเสียงดังที่โต๊ะไหน -> ตาหันไปทางโต๊ะนั้นทันที ม่านตาเป็นสีแดง (ขอบจอแดงทำใน TvPage)
-//  ทิศที่มอง = ตำแหน่งโต๊ะบนแปลนห้อง (ซ้าย/ขวา/บน/ล่าง ของแปลน) + มีแผนผังเล็กมุมจอบอกว่าโต๊ะไหน
+//  หน้าตา: ตา 2 ข้าง + คิ้ว
+//   ปกติ  = หน้าเป็นมิตร: ตากลมโต คิ้วโค้งยกขึ้น แก้มชมพูจาง ๆ กลอกตามองรอบห้อง + กะพริบ
+//   เสียงดัง = จ้องไปทางโต๊ะนั้น + โกรธ: คิ้วขมวด (หัวคิ้วกดลงเข้าหากัน) เปลือกตาบนลดลงเฉียง ม่านตาแดง
+//              (ขอบจอแดงทำใน TvPage)
+//  ทิศที่มอง = ตำแหน่งโต๊ะบนแปลนห้อง + มีแผนผังเล็กมุมจอบอกว่าโต๊ะไหน
 // ============================================================
 
 const ZONE = 'quiet'
-const ALMOND = 'M-440,0 Q0,-330 440,0 Q0,330 -440,0 Z' // รูปตา (viewBox กลาง = 0,0)
-const REACH_X = 250 // ม่านตาเลื่อนไปได้ไกลสุดกี่หน่วย (ไม่หลุดขอบตา)
-const REACH_Y = 105
+const EYE_X = 420 // ตาซ้าย/ขวาห่างจากกลางจอ
+// รูปตา (กลางตา = 0,0) ค่อนข้างกลม ดูเป็นมิตร
+const EYE =
+  'M-320,0 C-320,-190 -170,-235 0,-235 C170,-235 320,-190 320,0 C320,190 170,235 0,235 C-170,235 -320,190 -320,0 Z'
+const REACH_X = 175 // ม่านตาเลื่อนไปได้ไกลสุด (ไม่หลุดขอบตา)
+const REACH_Y = 95
+
+// คิ้ว (กลางคิ้ว = 0,0): ปกติโค้งยก / โกรธ = เฉียงให้หัวคิ้ว (ด้านใน) ต่ำลง
+const BROW_CALM = 'M-210,30 Q0,-70 210,30'
+const BROW_ANGRY = {
+  left: 'M-210,-45 Q0,-15 210,55', // หัวคิ้วซ้ายอยู่ด้านขวา -> ปลายขวาต่ำลง
+  right: 'M-210,55 Q0,-15 210,-45',
+}
 
 const clamp = (v) => Math.max(-1, Math.min(1, v))
 const reduceMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
@@ -34,6 +46,7 @@ export default function EyeView({ data, alert, ageMs }) {
   const [blink, setBlink] = useState(false)
   const alertId = alert?.id
   const alertSeat = alert?.seatId
+  const angry = Boolean(alert)
 
   // ไม่มีเสียงดัง -> กลอกตามองไปรอบ ๆ ห้องเรื่อย ๆ (บางทีก็กลับมามองตรง)
   useEffect(() => {
@@ -42,7 +55,7 @@ export default function EyeView({ data, alert, ageMs }) {
     const wander = () => {
       const angle = Math.random() * Math.PI * 2
       const r = 0.35 + Math.random() * 0.65
-      setGaze(Math.random() < 0.2 ? { x: 0, y: 0 } : { x: Math.cos(angle) * r, y: Math.sin(angle) * r })
+      setGaze(Math.random() < 0.25 ? { x: 0, y: 0 } : { x: Math.cos(angle) * r, y: Math.sin(angle) * r })
       timer = setTimeout(wander, 1800 + Math.random() * 2600)
     }
     timer = setTimeout(wander, 600)
@@ -54,9 +67,9 @@ export default function EyeView({ data, alert, ageMs }) {
     if (alertSeat) setGaze(directionTo(alertSeat))
   }, [alertId, alertSeat])
 
-  // กะพริบตาทุก 3–7 วินาที
+  // กะพริบตาทุก 3–7 วินาที (ตอนโกรธไม่กะพริบ = จ้องเขม็ง)
   useEffect(() => {
-    if (reduceMotion()) return
+    if (angry || reduceMotion()) return
     let wait
     let close
     const loop = () => {
@@ -72,11 +85,13 @@ export default function EyeView({ data, alert, ageMs }) {
     return () => {
       clearTimeout(wait)
       clearTimeout(close)
+      setBlink(false)
     }
-  }, [])
+  }, [angry])
 
-  const dx = gaze.x * REACH_X
-  const dy = gaze.y * REACH_Y
+  // ตอนโกรธเปลือกตาลดลง -> ไม่ให้มองสูงเกินไป ม่านตาจะได้ไม่หลบใต้เปลือกตา (ยังเห็นว่ากำลังจ้อง)
+  const dy = (angry ? Math.max(gaze.y, -0.15) : gaze.y) * REACH_Y
+  const look = { dx: gaze.x * REACH_X, dy, speed: angry ? 320 : 1100 }
   const name = alertSeat ? seatName(ZONE, alertSeat) : ''
 
   return (
@@ -84,18 +99,18 @@ export default function EyeView({ data, alert, ageMs }) {
       <p className="absolute left-[3vw] top-[3vh] text-[clamp(1rem,1.6vw,1.75rem)] font-semibold text-white/60">โซนเงียบ</p>
 
       <svg
-        viewBox="-500 -300 1000 600"
-        className="w-[min(78vw,125vh)]"
+        viewBox="-800 -450 1600 770"
+        className="w-[min(86vw,150vh)]"
         role="img"
-        aria-label={alert ? `ตากำลังมองไปที่${name}` : 'ตากำลังมองไปรอบ ๆ ห้อง'}
+        aria-label={angry ? `ตากำลังจ้องไปที่${name} อย่างไม่พอใจ` : 'ตากำลังมองไปรอบ ๆ ห้องอย่างเป็นมิตร'}
       >
         <defs>
           <clipPath id="tv-eye-shape">
-            <path d={ALMOND} />
+            <path d={EYE} />
           </clipPath>
           <radialGradient id="tv-sclera" cx="50%" cy="46%" r="62%">
             <stop offset="55%" stopColor="#f8fafc" />
-            <stop offset="100%" stopColor="#9aa7b8" />
+            <stop offset="100%" stopColor="#a3afc0" />
           </radialGradient>
           <radialGradient id="tv-iris-calm" cx="50%" cy="50%" r="50%">
             <stop offset="0%" stopColor="#99f6e4" />
@@ -108,36 +123,17 @@ export default function EyeView({ data, alert, ageMs }) {
             <stop offset="100%" stopColor="#7f1d1d" />
           </radialGradient>
           <linearGradient id="tv-lid-shadow" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#0f172a" stopOpacity="0.55" />
-            <stop offset="32%" stopColor="#0f172a" stopOpacity="0" />
+            <stop offset="0%" stopColor="#0f172a" stopOpacity="0.5" />
+            <stop offset="30%" stopColor="#0f172a" stopOpacity="0" />
           </linearGradient>
         </defs>
 
-        {/* ทั้งดวงหุบลง = กะพริบตา (จุดหมุนอยู่กลางตาเพราะ viewBox มี 0,0 อยู่ตรงกลาง) */}
-        <g style={{ transform: `scaleY(${blink ? 0.04 : 1})`, transition: 'transform 110ms ease-in-out' }}>
-          <path d={ALMOND} fill="url(#tv-sclera)" />
-          <g clipPath="url(#tv-eye-shape)">
-            <g
-              style={{
-                transform: `translate(${dx}px, ${dy}px)`,
-                transition: `transform ${alert ? 320 : 1100}ms cubic-bezier(.45,0,.2,1)`,
-              }}
-            >
-              <circle r="150" fill={`url(#${alert ? 'tv-iris-alert' : 'tv-iris-calm'})`} />
-              {/* ลายม่านตา */}
-              <circle r="105" fill="none" stroke="rgba(255,255,255,0.14)" strokeWidth="70" strokeDasharray="3 9" />
-              <circle r={alert ? 40 : 64} fill="#020617" style={{ transition: 'r 300ms ease' }} />
-              <circle cx="-52" cy="-58" r="26" fill="#fff" opacity="0.9" />
-              <circle cx="42" cy="46" r="10" fill="#fff" opacity="0.55" />
-            </g>
-            <path d={ALMOND} fill="url(#tv-lid-shadow)" />
-          </g>
-          <path d={ALMOND} fill="none" stroke="#0b1220" strokeWidth="16" strokeLinejoin="round" />
-        </g>
+        <Eye side="left" x={-EYE_X} look={look} blink={blink} angry={angry} />
+        <Eye side="right" x={EYE_X} look={look} blink={blink} angry={angry} />
       </svg>
 
-      <div className="mt-[4vh] min-h-[8vw] text-center">
-        {alert ? (
+      <div className="mt-[3vh] min-h-[8vw] text-center">
+        {angry ? (
           <>
             <p className="text-[clamp(2rem,4vw,5rem)] font-bold text-red-400">ตรวจพบเสียงดังที่{name}</p>
             <p className="mt-2 text-[clamp(1.1rem,2vw,2.5rem)] text-white/80">ช่วยกันรักษาความเงียบนะครับ</p>
@@ -158,6 +154,65 @@ export default function EyeView({ data, alert, ageMs }) {
 
       <MiniMap alertSeat={alertSeat} sensorSeats={data?.sensorSeats ?? []} />
     </div>
+  )
+}
+
+// ตา 1 ข้าง + คิ้ว + แก้ม (side = 'left' | 'right' — ใช้กำหนดว่าหัวตา/หัวคิ้วอยู่ด้านไหน)
+function Eye({ side, x, look, blink, angry }) {
+  const inward = side === 'left' ? 1 : -1 // ทิศเข้าหากลางหน้า
+  const ease = 'cubic-bezier(.45,0,.2,1)'
+  const aroundCenter = { transformBox: 'fill-box', transformOrigin: 'center' }
+  const browPath = angry ? BROW_ANGRY[side] : BROW_CALM
+
+  return (
+    <g transform={`translate(${x} 0)`}>
+      {/* แก้มชมพูจาง ๆ (หายไปตอนโกรธ) */}
+      <ellipse cx={-inward * 40} cy="265" rx="120" ry="42" fill="#f472b6" style={{ opacity: angry ? 0 : 0.2, transition: 'opacity 300ms' }} />
+
+      {/* ตา — ทั้งดวงหุบลง = กะพริบ */}
+      <g style={{ ...aroundCenter, transform: `scaleY(${blink ? 0.05 : 1})`, transition: 'transform 110ms ease-in-out' }}>
+        <path d={EYE} fill="url(#tv-sclera)" />
+        <g clipPath="url(#tv-eye-shape)">
+          <g style={{ transform: `translate(${look.dx}px, ${look.dy}px)`, transition: `transform ${look.speed}ms ${ease}` }}>
+            <circle r="125" fill={`url(#${angry ? 'tv-iris-alert' : 'tv-iris-calm'})`} />
+            {/* ลายม่านตา */}
+            <circle r="88" fill="none" stroke="rgba(255,255,255,0.14)" strokeWidth="58" strokeDasharray="3 8" />
+            <circle r={angry ? 34 : 58} fill="#020617" style={{ transition: 'r 300ms ease' }} />
+            <circle cx="-44" cy="-50" r="24" fill="#fff" opacity="0.92" />
+            <circle cx="36" cy="40" r="9" fill="#fff" opacity="0.55" />
+          </g>
+          <path d={EYE} fill="url(#tv-lid-shadow)" />
+          {/* เปลือกตาบน: ปกติซ่อนไว้ด้านบน / โกรธ = ลดลงมาเฉียง หัวตาต่ำกว่า -> ตาหรี่จ้อง */}
+          <g
+            style={{
+              ...aroundCenter,
+              transform: angry ? `translateY(-50px) rotate(${17 * inward}deg)` : 'translateY(-220px)',
+              transition: `transform 280ms ${ease}`,
+            }}
+          >
+            <rect x="-400" y="-330" width="800" height="260" fill="#1b2638" />
+            <line x1="-400" y1="-70" x2="400" y2="-70" stroke="#0b1220" strokeWidth="14" strokeLinecap="round" />
+          </g>
+        </g>
+        <path d={EYE} fill="none" stroke="#0b1220" strokeWidth="14" strokeLinejoin="round" />
+      </g>
+
+      {/* คิ้ว: ปกติโค้งยกสูง / โกรธ = ขมวด (ต่ำลง ขยับเข้าหากัน หัวคิ้วกดลง) */}
+      <g transform="translate(0 -335)">
+        <path
+          d={browPath}
+          fill="none"
+          stroke={angry ? '#fca5a5' : '#e2e8f0'}
+          strokeWidth="44"
+          strokeLinecap="round"
+          style={{
+            d: `path("${browPath}")`,
+            transform: angry ? `translate(${22 * inward}px, 55px)` : 'translate(0px, 0px)',
+            transition: `d 280ms ${ease}, transform 280ms ${ease}, stroke 280ms`,
+          }}
+        />
+      </g>
+    </g>
   )
 }
 
