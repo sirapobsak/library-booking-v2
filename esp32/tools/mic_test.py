@@ -29,7 +29,7 @@ SPEECH_MOD_DB = 6.0          # ช่วงดัง-ช่วงเบาขอ
 LIMIT_DB = 65
 CALIBRATE_SECONDS = 15       # ฟังเสียงพื้นหลังของห้องก่อนกี่วินาที (เหมือน main.py)
 FLOOR_MAX_DB = 72
-ABOVE_FLOOR_DB = 6           # ต้องดังกว่าเสียงพื้นหลังอย่างน้อยกี่ dB ถึงนับว่าดัง (เหมือน main.py)
+LOUD_ABOVE_DB = 15          # เสียงพื้นหลัง = 0 — ต้องดังกว่าพื้นหลังอย่างน้อยกี่ dB ถึงนับว่าดัง (เหมือน main.py)
 
 buf = bytearray(CHUNK_BYTES)
 
@@ -290,7 +290,7 @@ def calibrate(mic, speech, low, seconds):
             print("  เหลือ %d วินาที" % left)
     s = sorted(levels)
     floor = min(s[len(s) // 2] if s else 30.0, FLOOR_MAX_DB)
-    need = max(floor + ABOVE_FLOOR_DB, 10 * math.log10(10 ** (LIMIT_DB / 10) + 10 ** (floor / 10)))
+    need = max(floor + LOUD_ABOVE_DB, 10 * math.log10(10 ** (LIMIT_DB / 10) + 10 ** (floor / 10)))
     print("เสียงพื้นหลัง (ช่วงพูด) = %.1f dB -> เสียงพูดต้องดังถึง ~%.1f dB ถึงนับว่าดัง (เหมือนบอร์ด)" % (floor, need))
     return floor
 
@@ -302,7 +302,8 @@ def meter(seconds=None, calib_seconds=None):
     print("เป็นเสียงพูด = ช่วงพูด(ของเสียงเหนือ 250 Hz) >= %d%% และ จังหวะดัง-เบา >= %.0f dB" % (
         int(SPEECH_RATIO_MIN * 100), SPEECH_MOD_DB))
     print("นับว่าดัง = เสียงพูดที่ดังกว่าพื้นหลัง >= %d dB และเสียงคนพูดเอง (หักพื้นหลังแล้ว) > %d dB" % (
-        ABOVE_FLOOR_DB, LIMIT_DB))
+        LOUD_ABOVE_DB, LIMIT_DB))
+    print("(\"ดังเกิน\" แต่ละบรรทัด = แค่ครึ่งวินาทีนั้น — บอร์ดจะเตือน 1 ครั้งเมื่อดังสะสมครบ 5 วินาที)")
     mic = open_mic(I2S.MONO)  # แบบเดียวกับ main.py
     speech = Band(250, 3400)  # ช่วงเสียงพูด (เหมือน main.py)
     low = Band(30, 250)       # เสียงหึ่งความถี่ต่ำ (แอร์ พัดลม ไฟฟ้า)
@@ -352,10 +353,10 @@ def report(e_speech, e_low, e_total, e_hp, pairs, levels, st, n_samples, floor):
     ratio = e_speech / e_hp if e_hp > 0 else 0
     voice = ratio >= SPEECH_RATIO_MIN and mod >= SPEECH_MOD_DB
     bar = "#" * int(max(0, min(20, (speech_db - 30) / 3)))
-    loud = speech_db >= floor + ABOVE_FLOOR_DB and talker_db(speech_db, floor) > LIMIT_DB
+    loud = speech_db >= floor + LOUD_ABOVE_DB and talker_db(speech_db, floor) > LIMIT_DB
     tag = ("เสียงพูด ✓" + (" ดังเกิน!" if loud else " (ยังไม่ถึงเกณฑ์ดัง)")) if voice else "ไม่ใช่เสียงพูด"
-    print("ทั้งหมด %5.1f dB | ช่วงพูด %5.1f dB %-20s เหนือพื้นหลัง %+5.1f | ต่ำ %3d%% พูด %3d%% อื่น %3d%% | พูด/เหนือ250 %3d%% | จังหวะ %4.1f dB | %s" % (
-        total_db, speech_db, bar, speech_db - floor, lo, sp, other, min(100, int(100 * ratio)), mod, tag))
+    print("ทั้งหมด %5.1f dB | ช่วงพูด %5.1f dB %-20s เหนือพื้นหลัง %+5.1f/+%d | ต่ำ %3d%% พูด %3d%% อื่น %3d%% | พูด/เหนือ250 %3d%% | จังหวะ %4.1f dB | %s" % (
+        total_db, speech_db, bar, speech_db - floor, LOUD_ABOVE_DB, lo, sp, other, min(100, int(100 * ratio)), mod, tag))
     peak = max(abs(st[0]), abs(st[1]))
     if st[2] > n_samples * 0.9:
         print("   !! ไมค์ส่งแต่ค่า 0 — เช็คสาย SD->D23 / L/R->GND / VDD->3V3")

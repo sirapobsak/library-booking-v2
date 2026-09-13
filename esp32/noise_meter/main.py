@@ -70,7 +70,8 @@ DB_OFFSET = 0.0            # ปรับให้ตรงกับแอปว
 DENOISE = True             # True = หักเสียงพื้นหลัง + ตัดเสียงกระแทกสั้น ๆ / False = ใช้ค่าดิบจากไมค์
 CALIBRATE_SECONDS = 15     # หลังเปิดเครื่อง ฟังเสียงพื้นหลังของห้องกี่วินาที (ช่วงนี้ขอให้เงียบ — นานขึ้น = วัดแม่นขึ้น)
 FLOOR_MAX_DB = 72          # เสียงพื้นหลังที่ยอมหักออกได้สูงสุด (ห้องมีแอร์/พัดลมใกล้ ๆ อาจถึง ~67 dB)
-ABOVE_FLOOR_DB = 6         # ต้องดังกว่าเสียงพื้นหลังของห้องอย่างน้อยกี่ dB ถึงนับว่าดัง (พูดเบา ๆ ในห้องที่มีแอร์/พัดลม ไม่นับ)
+LOUD_ABOVE_DB = 15         # เสียงพื้นหลังของห้อง = 0 — เสียงพูดต้องดังกว่าพื้นหลังอย่างน้อยกี่ dB ถึงนับว่าดัง
+                           #   15 ≈ ขึ้นเสียงพูดดังชัดเจน / พูดเบา-พูดปกติ (~+3 ถึง +12) ไม่นับ / อยากให้จับง่ายขึ้น ลดเป็น 12
 MEDIAN_WINDOWS = 5         # ตัดเสียงกระแทกสั้นกว่า ~0.3 วิ (ใช้ค่ากลางของ 5 ช่วงล่าสุด = 0.625 วิ)
 DB_MIN = 30                # ค่าต่ำสุดที่แสดง (เงียบมาก)
 
@@ -296,7 +297,7 @@ class Denoiser:
             if len(self.calib) * WINDOW_MS >= CALIBRATE_SECONDS * 1000:
                 self.floor = min(median(self.calib), FLOOR_MAX_DB)
                 self.calib = []
-                need = max(self.floor + ABOVE_FLOOR_DB, 10 * math.log10(10 ** (LIMIT_DB / 10) + 10 ** (self.floor / 10)))
+                need = max(self.floor + LOUD_ABOVE_DB, 10 * math.log10(10 ** (LIMIT_DB / 10) + 10 ** (self.floor / 10)))
                 print("วัดเสียงพื้นหลังเสร็จ: %.1f dB — เสียงพูดต้องดังถึง ~%.1f dB (ค่าดิบ) ถึงนับว่าดัง" % (self.floor, need))
             return max(db_raw, DB_MIN)
 
@@ -310,8 +311,8 @@ class Denoiser:
         self.floor = min(self.floor, FLOOR_MAX_DB)
 
         # หักพลังงานเสียงพื้นหลังออก (เสียงรวมกันแบบบวกพลังงาน ไม่ใช่บวกเลข dB ตรง ๆ)
-        #   ดังกว่าพื้นหลังไม่ถึง ABOVE_FLOOR_DB = ยังกลืนกับเสียงห้อง (เช่นพูดเบา ๆ ข้างแอร์) -> ไม่นับ
-        if db_raw < self.floor + ABOVE_FLOOR_DB:
+        #   เสียงพื้นหลังนับเป็น 0: ดังกว่าพื้นหลังไม่ถึง LOUD_ABOVE_DB (เช่นพูดเบา ๆ / พูดปกติ) -> ไม่นับ
+        if db_raw < self.floor + LOUD_ABOVE_DB:
             clean = DB_MIN
         else:
             p = 10 ** (db_raw / 10) - 10 ** (self.floor / 10)
@@ -1084,7 +1085,9 @@ def main():
         if time.ticks_diff(now, last_print) >= PRINT_MS:
             last_print = now
             gc.collect()  # เก็บกวาดหน่วยความจำทุกวินาที
-            raw = " (ดิบ %.1f, พื้นหลัง %.1f)" % (raw_db, denoiser.floor) if DENOISE and denoiser.floor is not None else ""
+            raw = (" (ดิบ %.1f, พื้นหลัง %.1f, เหนือพื้นหลัง %+.1f / ต้อง +%d)"
+                   % (raw_db, denoiser.floor, raw_db - denoiser.floor, LOUD_ABOVE_DB)
+                   if DENOISE and denoiser.floor is not None else "")
             if VOICE_ONLY:
                 raw += " | %s (ช่วงพูด %d%%, จังหวะ %.1f dB)" % ("เสียงคน" if voice else "ไม่ใช่เสียงคน", int(ratio * 100), modu)
             if denoiser.calibrating():
