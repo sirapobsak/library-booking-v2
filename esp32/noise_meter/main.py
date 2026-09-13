@@ -102,6 +102,7 @@ PIN_BOOT = 0           # ปุ่ม BOOT บนบอร์ด (ไม่ต�
 SAMPLE_RATE = 16000          # อ่านเสียง 16,000 ครั้งต่อวินาที
 MIC_SENSITIVITY_DBFS = -26   # INMP441: เสียง 94 dB อ่านได้ -26 dBFS (จาก datasheet ของไมค์)
 CHUNK_SAMPLES = 512          # อ่านทีละ 512 ค่า (~0.03 วินาที)
+MIC_IBUF = 8192              # ที่พักเสียงของไมค์ (ไบต์) — เล็กลงเหลือหน่วยความจำให้ HTTPS มากขึ้น
 WINDOW_MS = 125              # สรุปค่า dB ทุก 1/8 วินาที
 DRAW_MS = 200                # วาดจอใหม่ทุก 0.2 วินาที
 PRINT_MS = 1000              # พิมพ์ค่าลง Shell ของ Thonny ทุก 1 วินาที
@@ -478,26 +479,47 @@ def setup_oled():
     return None
 
 
+def start_mic():
+    # เปิดไมค์ (ถ้ายังไม่เปิด)
+    global mic
+    if mic is None:
+        mic = I2S(
+            0,
+            sck=Pin(PIN_MIC_SCK),
+            ws=Pin(PIN_MIC_WS),
+            sd=Pin(PIN_MIC_SD),
+            mode=I2S.RX,
+            bits=32,
+            format=I2S.MONO,  # ขา L/R ของไมค์ต่อ GND = ส่งเสียงช่องซ้าย
+            rate=SAMPLE_RATE,
+            ibuf=MIC_IBUF,
+        )
+
+
+def stop_mic():
+    # ปิดไมค์ชั่วคราวตอนคุยกับเว็บ: ESP32 รุ่นนี้ไม่มี RAM เสริม (PSRAM) หน่วยความจำไม่พอให้ไมค์กับ HTTPS
+    # ทำงานพร้อมกัน -> ปิดไมค์คืนหน่วยความจำให้ HTTPS ก่อน ส่งเสร็จเปิดใหม่ (ช่วงนั้นไม่นับเสียงอยู่แล้ว)
+    global mic
+    if mic is not None:
+        try:
+            mic.deinit()
+        except Exception:
+            pass
+        mic = None
+
+
 def setup_hardware():
-    global mic, samples, oled, led_green, led_yellow, led_red, boot_button, wlan
+    global samples, oled, led_green, led_yellow, led_red, boot_button, wlan
     led_green = Pin(PIN_LED_GREEN, Pin.OUT, value=0)
     led_yellow = Pin(PIN_LED_YELLOW, Pin.OUT, value=0)
     led_red = Pin(PIN_LED_RED, Pin.OUT, value=0)
     boot_button = Pin(PIN_BOOT, Pin.IN, Pin.PULL_UP)
     oled = setup_oled()
-    mic = I2S(
-        0,
-        sck=Pin(PIN_MIC_SCK),
-        ws=Pin(PIN_MIC_WS),
-        sd=Pin(PIN_MIC_SD),
-        mode=I2S.RX,
-        bits=32,
-        format=I2S.MONO,  # ขา L/R ของไมค์ต่อ GND = ส่งเสียงช่องซ้าย
-        rate=SAMPLE_RATE,
-        ibuf=16384,
-    )
+    start_mic()
     samples = bytearray(CHUNK_SAMPLES * 4)
     wlan = network.WLAN(network.STA_IF)
+    gc.collect()
+    print("หน่วยความจำว่าง %d ไบต์" % gc.mem_free())
 
 
 def show_leds(strikes):
@@ -586,7 +608,7 @@ def rpc_error_hint(e):
     if "-202" in msg or "EHOSTUNREACH" in msg:
         return "หาเว็บไม่เจอ — WiFi นี้ออกอินเทอร์เน็ตได้ไหม (ลองเปิดเว็บจากมือถือที่ต่อ WiFi เดียวกัน)"
     if "ENOMEM" in msg or "-17040" in msg or isinstance(e, MemoryError):
-        return "หน่วยความจำบอร์ดไม่พอสำหรับ HTTPS — กด Stop/Restart"
+        return "หน่วยความจำบอร์ดไม่พอสำหรับ HTTPS (%s)" % msg
     if "ETIMEDOUT" in msg or "110" in msg or "timed out" in msg:
         return "หมดเวลารอเว็บ — เน็ตช้าหรือ WiFi นี้บล็อกเว็บภายนอก"
     if "-29" in msg or "SSL" in msg or "ECONNRESET" in msg or "104" in msg:
@@ -595,7 +617,16 @@ def rpc_error_hint(e):
 
 
 def call_rpc(fn, level):
-    # เรียกฟังก์ชันบนเว็บ: POST <SUPABASE_URL>/rest/v1/rpc/<fn>  -> คืนผลเป็น dict (ไม่สำเร็จคืน None)
+    # เรียกฟังก์ชันบนเว็บ (ปิดไมค์ระหว่างส่ง ให้ HTTPS มีหน่วยความจำพอ แล้วเปิดไมค์กลับเสมอ)
+    stop_mic()
+    try:
+        return post_rpc(fn, level)
+    finally:
+        start_mic()
+
+
+def post_rpc(fn, level):
+    # POST <SUPABASE_URL>/rest/v1/rpc/<fn>  -> คืนผลเป็น dict (ไม่สำเร็จคืน None)
     global last_rpc_error, web_seen
     body = json.dumps({"p_device": DEVICE_ID, "p_key": DEVICE_KEY, "p_level": int(level)})
     headers = {"Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY}
@@ -612,7 +643,8 @@ def call_rpc(fn, level):
             break
         except Exception as e:
             last_rpc_error = "ส่งไม่สำเร็จ: " + rpc_error_hint(e)
-            print("[%s] %s (ครั้งที่ %d)" % (fn, last_rpc_error, attempt))
+            gc.collect()
+            print("[%s] %s (ครั้งที่ %d, หน่วยความจำว่าง %d ไบต์)" % (fn, last_rpc_error, attempt, gc.mem_free()))
             if attempt == 2:
                 return None
     if code != 200:
