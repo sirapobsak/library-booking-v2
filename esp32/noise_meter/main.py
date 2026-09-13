@@ -37,6 +37,16 @@ except ImportError:
     ssd1306 = None
 
 try:
+    import esp32  # ดูหน่วยความจำฝั่งระบบ (ESP-IDF) — ใช้ตอนหาสาเหตุ HTTPS หน่วยความจำไม่พอ
+except ImportError:
+    esp32 = None
+
+try:
+    import os
+except ImportError:
+    os = None
+
+try:
     import urequests as requests
 except ImportError:
     import requests
@@ -518,8 +528,23 @@ def setup_hardware():
     start_mic()
     samples = bytearray(CHUNK_SAMPLES * 4)
     wlan = network.WLAN(network.STA_IF)
+    try:
+        version = os.uname().release
+    except Exception:
+        version = "?"
+    print("MicroPython %s | %s" % (version, mem_report()))
+
+
+def mem_report():
+    # หน่วยความจำ 2 ก้อน: ของ Python (gc) กับของระบบ ESP-IDF (WiFi + HTTPS ใช้ก้อนนี้ ต้องมีก้อนว่าง ~40,000 ไบต์)
     gc.collect()
-    print("หน่วยความจำว่าง %d ไบต์" % gc.mem_free())
+    text = "Python ว่าง %d" % gc.mem_free()
+    try:
+        info = esp32.idf_heap_info(esp32.HEAP_DATA)  # [(ทั้งหมด, ว่าง, ก้อนว่างใหญ่สุด, ว่างน้อยสุด), ...]
+        text += " | ระบบว่าง %d (ก้อนใหญ่สุด %d)" % (sum(x[1] for x in info), max(x[2] for x in info))
+    except Exception:
+        pass
+    return text + " ไบต์"
 
 
 def show_leds(strikes):
@@ -545,6 +570,7 @@ last_allowed = True   # ผู้ดูแลเชื่อมต่อเซ�
 last_seat = None      # โต๊ะที่ผูกอยู่ (ครั้งก่อน) — ใช้ดูว่าผู้ดูแลเพิ่งย้ายโต๊ะ
 wifi_announced = False  # พิมพ์ "ต่อ WiFi สำเร็จ" ไปแล้วหรือยัง
 last_rpc_error = None   # คุยกับเว็บครั้งล่าสุดพังเพราะอะไร (None = ครั้งล่าสุดสำเร็จ)
+mem_dumped = False      # พิมพ์รายละเอียดหน่วยความจำไปแล้วหรือยัง (พิมพ์ครั้งเดียวพอ)
 web_seen = False        # เคยคุยกับเว็บสำเร็จแล้วหรือยัง
 
 
@@ -608,7 +634,7 @@ def rpc_error_hint(e):
     if "-202" in msg or "EHOSTUNREACH" in msg:
         return "หาเว็บไม่เจอ — WiFi นี้ออกอินเทอร์เน็ตได้ไหม (ลองเปิดเว็บจากมือถือที่ต่อ WiFi เดียวกัน)"
     if "ENOMEM" in msg or "-17040" in msg or isinstance(e, MemoryError):
-        return "หน่วยความจำบอร์ดไม่พอสำหรับ HTTPS (%s)" % msg
+        return "หน่วยความจำไม่พอสำหรับ HTTPS (%s) — อัปเดตเฟิร์มแวร์ MicroPython" % msg
     if "ETIMEDOUT" in msg or "110" in msg or "timed out" in msg:
         return "หมดเวลารอเว็บ — เน็ตช้าหรือ WiFi นี้บล็อกเว็บภายนอก"
     if "-29" in msg or "SSL" in msg or "ECONNRESET" in msg or "104" in msg:
@@ -627,7 +653,7 @@ def call_rpc(fn, level):
 
 def post_rpc(fn, level):
     # POST <SUPABASE_URL>/rest/v1/rpc/<fn>  -> คืนผลเป็น dict (ไม่สำเร็จคืน None)
-    global last_rpc_error, web_seen
+    global last_rpc_error, web_seen, mem_dumped
     body = json.dumps({"p_device": DEVICE_ID, "p_key": DEVICE_KEY, "p_level": int(level)})
     headers = {"Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY}
     url = SUPABASE_URL + "/rest/v1/rpc/" + fn
@@ -643,9 +669,13 @@ def post_rpc(fn, level):
             break
         except Exception as e:
             last_rpc_error = "ส่งไม่สำเร็จ: " + rpc_error_hint(e)
-            gc.collect()
-            print("[%s] %s (ครั้งที่ %d, หน่วยความจำว่าง %d ไบต์)" % (fn, last_rpc_error, attempt, gc.mem_free()))
+            print("[%s] %s (ครั้งที่ %d | %s)" % (fn, last_rpc_error, attempt, mem_report()))
             if attempt == 2:
+                if "ENOMEM" in str(e) and not mem_dumped:
+                    mem_dumped = True
+                    micropython.mem_info()  # รายละเอียดหน่วยความจำ (ถ่ายภาพส่งให้คนช่วยดูได้)
+                    print("!! HTTPS ต้องใช้หน่วยความจำระบบก้อนใหญ่ — แก้: อัปเดตเฟิร์มแวร์ MicroPython เป็นรุ่นล่าสุด"
+                          " (esp32/README.md หัวข้อ 'HTTPS หน่วยความจำไม่พอ')")
                 return None
     if code != 200:
         if "BAD_DEVICE" in text:
@@ -1121,6 +1151,7 @@ def main():
             draw(counter, booking, now, online, seat, penalty, note, allowed, quiet_ms, denoiser.calibrating())
         if time.ticks_diff(now, last_print) >= PRINT_MS:
             last_print = now
+            gc.collect()  # เก็บกวาดทุกวินาที กันหน่วยความจำแตกเป็นก้อนเล็ก ๆ (HTTPS ต้องการก้อนใหญ่)
             raw = " (ดิบ %.1f, พื้นหลัง %.1f)" % (raw_db, denoiser.floor) if DENOISE and denoiser.floor is not None else ""
             if VOICE_ONLY:
                 raw += " | %s (ช่วงพูด %d%%, จังหวะ %.1f dB)" % ("เสียงคน" if voice else "ไม่ใช่เสียงคน", int(ratio * 100), modu)
