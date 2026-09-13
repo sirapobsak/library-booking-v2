@@ -606,7 +606,8 @@ def keep_wifi(now):
     if wlan.isconnected():
         if not wifi_announced:
             wifi_announced = True
-            print("ต่อ WiFi \"%s\" สำเร็จ — IP %s" % (WIFI_SSID, wlan.ifconfig()[0]))
+            print("ต่อ WiFi \"%s\" สำเร็จ — IP %s | %s" % (WIFI_SSID, wlan.ifconfig()[0], mem_report()))
+            print("กำลังถามเว็บครั้งแรก — ระหว่างนี้จอค้างได้ถึง ~20 วินาที ไม่ต้องกด Restart")
         return True
     if wifi_announced:
         wifi_announced = False
@@ -659,17 +660,24 @@ def post_rpc(fn, level):
     url = SUPABASE_URL + "/rest/v1/rpc/" + fn
     for attempt in (1, 2):  # พลาดครั้งแรก (มักเป็นหน่วยความจำ/HTTPS สะดุด) เก็บกวาดแล้วลองอีกรอบ
         gc.collect()  # HTTPS ใช้หน่วยความจำเยอะ เก็บกวาดก่อน
+        loud = last_rpc_error or not web_seen  # ยังไม่เคยสำเร็จ/เพิ่งพัง -> บอกทุกขั้นใน Shell
+        if loud:
+            print("[%s] กำลังถามเว็บ... (ครั้งที่ %d | %s)" % (fn, attempt, mem_report()))
+        t0 = time.ticks_ms()
         try:
             try:
-                r = requests.post(url, data=body, headers=headers, timeout=10)
+                r = requests.post(url, data=body, headers=headers, timeout=8)
             except TypeError:  # เฟิร์มแวร์เก่า requests ไม่มี timeout
                 r = requests.post(url, data=body, headers=headers)
             code, text = r.status_code, r.text
             r.close()
+            if loud:
+                print("[%s] เว็บตอบกลับแล้ว HTTP %d (%.1f วินาที)" % (fn, code, time.ticks_diff(time.ticks_ms(), t0) / 1000))
             break
         except Exception as e:
             last_rpc_error = "ส่งไม่สำเร็จ: " + rpc_error_hint(e)
-            print("[%s] %s (ครั้งที่ %d | %s)" % (fn, last_rpc_error, attempt, mem_report()))
+            print("[%s] %s (ครั้งที่ %d, %.1f วินาที | %s)" % (
+                fn, last_rpc_error, attempt, time.ticks_diff(time.ticks_ms(), t0) / 1000, mem_report()))
             if attempt == 2:
                 if "ENOMEM" in str(e) and not mem_dumped:
                     mem_dumped = True
@@ -1132,6 +1140,8 @@ def main():
                 if due and not busy:
                     last_heartbeat = now
                     force_heartbeat = False
+                    if not web_seen or last_rpc_error:  # ยังเชื่อมเว็บไม่สำเร็จ -> บอกบนจอว่ากำลังทำอะไร (จอจะค้างช่วงนี้)
+                        draw(counter, booking, now, online, seat, penalty, ("LINKING", "ASKING WEB"), allowed)
                     res = call_rpc("device_heartbeat", db)
                     if res is not None:
                         allowed, penalty, seat, changed = apply_status(res, booking, counter, time.ticks_ms())
