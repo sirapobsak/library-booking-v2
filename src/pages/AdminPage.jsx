@@ -792,7 +792,7 @@ function DevicesTab({ api }) {
     const r = await api.createDevice({ name, zoneId: DEVICE_ZONE, seatId: seat })
     setBusy(null)
     if (!r.ok) return setFlash({ type: 'error', text: r.message })
-    setKeyInfo(r.data)
+    setKeyInfo({ ...r.data, zoneId: DEVICE_ZONE, seatId: seat })
     setName('')
     setSeat('')
     load()
@@ -854,7 +854,7 @@ function DevicesTab({ api }) {
   async function newKey(d) {
     if (!window.confirm(`สร้างคีย์ใหม่ให้ ${label(d)}?\nคีย์เก่าจะใช้ไม่ได้ทันที ต้องใส่คีย์ใหม่ในโค้ดบอร์ดแล้วอัปโหลดใหม่`)) return
     const r = await act(d, () => api.resetDeviceKey(d.id))
-    if (r.ok) setKeyInfo({ id: d.id, key: r.data })
+    if (r.ok) setKeyInfo({ id: d.id, key: r.data, zoneId: d.zoneId, seatId: d.seatId })
   }
 
   async function remove(d) {
@@ -1077,9 +1077,11 @@ function DevButton({ tone = 'slate', children, ...props }) {
 // คีย์ + โค้ดตั้งค่าสำหรับวางใน ESP32 (คีย์จริงแสดงครั้งเดียว ฐานข้อมูลเก็บแค่ hash)
 function KeyModal({ info, onClose }) {
   const [copied, setCopied] = useState(false)
+  const desk = info.seatId ? seatName(info.zoneId ?? DEVICE_ZONE, info.seatId) : 'โต๊ะที่เลือก'
   const url = import.meta.env.VITE_SUPABASE_URL || 'https://xxxx.supabase.co'
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'ใส่ anon key ของโปรเจกต์'
   const snippet = [
+    `# เชื่อมกับ${desk} (${info.id}) — บอร์ดจะเฝ้าเสียงเฉพาะการจองของโต๊ะนี้`,
     `SUPABASE_URL = "${url}"`,
     `SUPABASE_ANON_KEY = "${anonKey}"`,
     `DEVICE_ID = "${info.id}"`,
@@ -1097,7 +1099,7 @@ function KeyModal({ info, onClose }) {
   }
 
   return (
-    <Modal title={`คีย์ของอุปกรณ์ ${info.id}`} onClose={onClose}>
+    <Modal title={`คีย์เชื่อมเซนเซอร์กับ${desk}`} onClose={onClose}>
       <div className="space-y-4">
         <p className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           <KeyRound className="mt-0.5 h-4 w-4 shrink-0" />
@@ -1105,7 +1107,7 @@ function KeyModal({ info, onClose }) {
         </p>
         <div>
           <p className="mb-1.5 text-sm text-slate-600">
-            วาง 4 บรรทัดนี้ทับของเดิมใน “ส่วนที่ 1 — ตั้งค่า” ของ <code>esp32/noise_meter/main.py</code> (ไฟล์ที่ใส่คีย์แล้วห้ามอัปขึ้น GitHub)
+            วาง 5 บรรทัดนี้ทับของเดิมใน “ส่วนที่ 1 — ตั้งค่า” ของ <code>esp32/noise_meter/main.py</code> (ไฟล์ที่ใส่คีย์แล้วห้ามอัปขึ้น GitHub)
           </p>
           <pre className="overflow-x-auto rounded-xl bg-slate-900 p-4 text-xs leading-relaxed text-slate-100">{snippet}</pre>
         </div>

@@ -7,9 +7,11 @@
 #   2. เฝ้าเสียงเฉพาะช่วงเวลาที่มีการจอง
 #      ดังเกิน 65 dB สะสมครบ 5 วินาที = เสียงดัง 1 ครั้ง
 #      (ระหว่างจับเวลา ถ้าเงียบติดกันเกิน 10 วินาที = ไม่นับ ไม่หัก ล้างเวลาทิ้งเริ่มใหม่)
-#   3. 3 วินาทีสุดท้ายก่อนครบ 5 วินาที จอขึ้นนับถอยหลัง 3-2-1
-#   4. ครั้งที่ 1 ไฟเขียว / ครั้งที่ 2 ไฟเหลือง / ครั้งที่ 3 ไฟแดง (แดงค้างจนหมดเวลาจอง)
-#   5. ตั้งแต่ครั้งที่ 3 เป็นต้นไป ทุกครั้งส่งไปเว็บให้หักคะแนน (ครั้งละ 5 แต้ม ตั้งค่าได้ในหน้าผู้ดูแล)
+#   3. จอ: ตอนเงียบเป็นตา 2 ข้างมีคิ้ว (เป็นมิตร) มองไปมา สลับกับ "เงียบมาแล้วกี่วินาที/นาที/ชั่วโมง"
+#      มีเสียงพูดดัง -> 2 วินาทีแรกตาโกรธ (คิ้วขมวด จ้อง) -> 3 วินาทีสุดท้ายนับถอยหลัง 3-2-1 ตัวใหญ่
+#   4. ครบ 5 วินาที = ไฟเตือน: ครั้งที่ 1 เขียว / ครั้งที่ 2 เหลือง / ครั้งที่ 3 ขึ้นไป แดง (แดงค้างจนหมดเวลาจอง)
+#      ขึ้นไฟเตือนแล้ว เวลาที่เงียบกลับเป็น 0 เริ่มจับใหม่
+#   5. ตั้งแต่ครั้งที่ 3 ส่งไปเว็บให้หักคะแนน — หักเท่าไรเป็นไปตามระบบคะแนนบนเว็บ (บอร์ดไม่ได้กำหนดเอง)
 #   6. หมดเวลาจอง -> ไฟดับ นับใหม่จาก 0 สำหรับการจองรอบถัดไป
 #   * จับเฉพาะเสียงคนพูด: กรองช่วงความถี่เสียงพูด + ดูจังหวะพยางค์ (พัดลม เครื่องจักร เสียงบี๊บ ไม่นับ)
 #   * ลดเสียงรบกวน (denoise): หักเสียงพื้นหลังของห้อง + ตัดเสียงกระแทกสั้น ๆ ก่อนตัดสินว่าดัง
@@ -20,6 +22,7 @@
 import gc
 import json
 import math
+import random
 import time
 from array import array
 
@@ -43,7 +46,10 @@ except ImportError:
 #  ส่วนที่ 1 — ตั้งค่า
 # ============================================================
 
-# ---------- WiFi (ESP32 ใช้ได้แค่ 2.4 GHz) + เว็บ (4 บรรทัดจากหน้าผู้ดูแล > อุปกรณ์เซนเซอร์) ----------
+# ---------- WiFi (ESP32 ใช้ได้แค่ 2.4 GHz) + เว็บ (บรรทัดจากหน้าผู้ดูแล > อุปกรณ์เซนเซอร์) ----------
+# เชื่อมกับโต๊ะไหน = ใช้ค่าของโต๊ะนั้น: หน้าผู้ดูแล > อุปกรณ์เซนเซอร์ > เพิ่มอุปกรณ์ > เลือกโต๊ะ (เช่น D18)
+#   -> ได้ DEVICE_ID + DEVICE_KEY ของโต๊ะนั้น -> บอร์ดเฝ้าเสียงเฉพาะการจองของโต๊ะนั้น
+#   (ย้ายไปโต๊ะอื่นกด "ย้ายโต๊ะ" ในหน้าผู้ดูแลได้เลย ไม่ต้องแก้ไฟล์นี้)
 # !! ไฟล์ที่ใส่คีย์จริงแล้ว ห้ามอัปขึ้น GitHub
 WIFI_SSID = "ชื่อWiFi"
 WIFI_PASS = "รหัสWiFi"
@@ -104,6 +110,9 @@ HEARTBEAT_MS = 30000         # ถามสถานะการจองจา�
 WIFI_RETRY_MS = 20000        # WiFi หลุด -> ลองต่อใหม่ทุก 20 วินาที
 REPORT_RETRY_MS = 10000      # ส่งหักคะแนนไม่สำเร็จ -> ลองใหม่ทุก 10 วินาที
 NOTE_MS = 2500               # ข้อความแจ้งเตือนบนจอค้างไว้กี่มิลลิวินาที
+EYES_MS = 6000               # ตอนเงียบ: โชว์ตากี่มิลลิวินาที ...
+TIMER_MS = 4000              # ... แล้วสลับไปโชว์ "เงียบมาแล้วกี่วินาที" กี่มิลลิวินาที
+CALM_AFTER_MS = 1500         # ระหว่างจับเวลา ถ้าหยุดพูดเกินเท่านี้ ตากลับมาเป็นมิตร (เวลาที่ดังยังเก็บไว้ตามกติกา 10 วิ)
 
 
 # ============================================================
@@ -580,7 +589,9 @@ def apply_status(res, booking, counter, now):
         changed = True
 
     # ผู้ดูแลกด "ย้ายโต๊ะ" -> เริ่มนับใหม่สำหรับโต๊ะใหม่ (ใช้คีย์เดิม ไม่ต้องแก้โค้ด)
-    if last_seat is not None and seat != last_seat:
+    if last_seat is None:
+        print("เชื่อมกับโต๊ะ %s แล้ว — เฝ้าเสียงเฉพาะการจองของโต๊ะนี้" % seat)
+    elif seat != last_seat:
         print("ผู้ดูแลย้ายเซนเซอร์จากโต๊ะ %s ไปโต๊ะ %s — เริ่มนับใหม่" % (last_seat, seat))
         counter.reset()
         show_leds(0)
@@ -605,8 +616,30 @@ def apply_status(res, booking, counter, now):
 
 
 # ============================================================
-#  ส่วนที่ 8 — จอ OLED (128x64 ตัวอักษรภาษาอังกฤษเท่านั้น)
+#  ส่วนที่ 8 — จอ OLED 128x64 (ตัวอักษรภาษาอังกฤษเท่านั้น)
+#   แถวบน: โต๊ะ + ครั้งที่เตือน | เวลาจองที่เหลือ / สถานะ
+#   ตรงกลางเป็น "ฉาก" (เลือกใน pick_scene):
+#     sleep     ไม่มีการจอง / ถูกตัดการเชื่อมต่อ / กำลังฟังเสียงพื้นหลัง -> ตาหลับ
+#     eyes      เงียบ -> ตา 2 ข้างมีคิ้ว หน้าเป็นมิตร มองไปมา กะพริบ (สลับกับ timer)
+#     timer     "QUIET FOR" เงียบมาแล้วกี่วินาที/นาที/ชั่วโมง (ขึ้นไฟเตือน = เริ่มนับจาก 0)
+#     angry     มีเสียงพูดดัง 2 วินาทีแรก -> ตาโกรธ คิ้วขมวด จ้อง
+#     countdown 3 วินาทีสุดท้าย -> ตัวเลข 3 2 1 ตัวใหญ่ + บอกว่าครั้งนี้จะโดนอะไร
+#     note      ข้อความใหญ่หลังขึ้นไฟเตือน / ส่งหักคะแนน
 # ============================================================
+EYE_L = 36    # จุดกลางตาซ้าย (แกน x)
+EYE_R = 92    # จุดกลางตาขวา
+EYE_Y = 40    # จุดกลางตา (แกน y)
+EYE_RX = 20   # ครึ่งความกว้างตา
+EYE_RY = 14   # ครึ่งความสูงตา
+
+gaze_x = 0.0      # ตามองไปทางไหนตอนนี้ (-1..1)
+gaze_y = 0.0
+target_x = 0.0    # กำลังจะมองไปทางไหน
+target_y = 0.0
+next_gaze = 0     # เปลี่ยนทิศที่มองรอบถัดไปเมื่อไร
+next_blink = 0    # กะพริบตารอบถัดไปเมื่อไร
+
+
 def big_text(s, x, y, scale, color=1):
     # ตัวหนังสือขนาดใหญ่: วาดตัวอักษร 8x8 ลงหน่วยความจำ แล้วขยายทีละพิกเซล
     w = len(s) * 8
@@ -618,17 +651,116 @@ def big_text(s, x, y, scale, color=1):
                 oled.fill_rect(x + i * scale, y + j * scale, scale, scale, color)
 
 
-def db_to_x(db):
-    # แถบระดับเสียง: 30 dB = ซ้ายสุด, 100 dB = ขวาสุด
-    return max(0, min(127, int((db - 30) * 128 / 70)))
+def center_text(s, y, color=1):
+    oled.text(s, max(0, (128 - 8 * len(s)) // 2), y, color)
 
 
-def draw(db, counter, booking, now, online, seat, penalty, note, allowed=True, voice=False):
+def fill_ellipse(cx, cy, rx, ry, color):
+    # วงรีทึบ (วาดทีละเส้นแนวนอน — ใช้ได้ทุกเฟิร์มแวร์)
+    for dy in range(-ry, ry + 1):
+        w = int(rx * math.sqrt(1 - (dy / ry) ** 2) + 0.5)
+        oled.hline(cx - w, cy + dy, 2 * w + 1, color)
+
+
+def fmt_quiet(ms):
+    # เวลาที่เงียบ -> "45s" / "12m05s" / "1h02m"
+    s = max(0, ms // 1000)
+    if s < 60:
+        return "%ds" % s
+    if s < 3600:
+        return "%dm%02ds" % (s // 60, s % 60)
+    return "%dh%02dm" % (s // 3600, (s % 3600) // 60)
+
+
+def pick_scene(counter, watching, note, now):
+    # เลือกว่าจอจะโชว์อะไร (แยกออกมาให้ทดสอบบนคอมได้)
+    if note:
+        return "note"
+    if not watching:
+        return "sleep"
+    talking = counter.loud_ms > 0 and counter.quiet_ms <= CALM_AFTER_MS
+    if talking:
+        # ดังครบ 5 วิ = 2 วิแรกตาโกรธ + 3 วิสุดท้ายนับถอยหลัง
+        return "countdown" if counter.countdown() is not None else "angry"
+    return "eyes" if now % (EYES_MS + TIMER_MS) < EYES_MS else "timer"
+
+
+def update_gaze(now):
+    # ตากลอกไปมาเอง (เปลี่ยนทิศทุก 1.5–3.5 วิ ค่อย ๆ เลื่อน) + คืน True ถ้าถึงรอบกะพริบ (ทุก 3–7 วิ)
+    global gaze_x, gaze_y, target_x, target_y, next_gaze, next_blink
+    if time.ticks_diff(now, next_gaze) >= 0:
+        if random.getrandbits(8) < 50:
+            target_x = target_y = 0.0  # บางทีก็มองตรงมาที่คนหน้าโต๊ะ
+        else:
+            target_x = (random.getrandbits(8) - 128) / 128
+            target_y = (random.getrandbits(8) - 128) / 128
+        next_gaze = time.ticks_add(now, 1500 + random.getrandbits(11))
+    gaze_x += (target_x - gaze_x) * 0.5
+    gaze_y += (target_y - gaze_y) * 0.5
+    if time.ticks_diff(now, next_blink) >= 0:
+        next_blink = time.ticks_add(now, 3000 + random.getrandbits(12))
+        return True
+    return False
+
+
+def draw_eye(cx, inward, mood, blink):
+    # inward = ทิศเข้าหากลางหน้า (+1 ตาซ้าย, -1 ตาขวา) ใช้ตอนทำหน้าโกรธ
+    if mood == "sleep":
+        for dx in range(-14, 15):  # ตาหลับ: เส้นโค้งหนา 2 พิกเซล
+            oled.fill_rect(cx + dx, EYE_Y - 2 + (196 - dx * dx) // 40, 1, 2, 1)
+        return
+    if blink:
+        oled.fill_rect(cx - EYE_RX + 2, EYE_Y, 2 * EYE_RX - 3, 2, 1)
+        return
+    fill_ellipse(cx, EYE_Y, EYE_RX, EYE_RY, 1)
+    if mood == "angry":
+        px, py, pr = cx + 2 * inward, EYE_Y + 4, 5  # จ้องตรงมาที่คนหน้าโต๊ะ รูม่านตาเล็ก
+    else:
+        px, py, pr = cx + int(gaze_x * 9), EYE_Y + int(gaze_y * 5), 7
+    fill_ellipse(px, py, pr, pr, 0)
+    oled.fill_rect(px - 3, py - 3, 2, 2, 1)  # ประกายแสงในตา
+    if mood == "angry":
+        # เปลือกตาบนลดลงเฉียง หัวตา (ด้านใน) ต่ำกว่า = ตาหรี่จ้อง
+        top = EYE_Y - EYE_RY - 1
+        for dx in range(-EYE_RX, EYE_RX + 1):
+            lid = EYE_Y - 6 + dx * inward * 5 // EYE_RX
+            oled.vline(cx + dx, top, lid - top, 0)
+            # เส้นขอบเปลือกตา — วาดเฉพาะส่วนที่อยู่ในตา (ไม่ให้มีขีดโผล่เลยหางตา)
+            if (dx / EYE_RX) ** 2 + ((lid - EYE_Y) / EYE_RY) ** 2 <= 1:
+                oled.pixel(cx + dx, lid, 1)
+
+
+def draw_brow(cx, inward, mood):
+    outer = cx - 15 * inward
+    inner = cx + 15 * inward
+    if mood == "angry":
+        pts = ((outer, 16), (inner, 24))            # หัวคิ้วกดลง = คิ้วขมวด
+    else:
+        pts = ((outer, 22), (cx, 17), (inner, 22))  # โค้งยก = หน้าเป็นมิตร
+    for k in range(len(pts) - 1):
+        (x0, y0), (x1, y1) = pts[k], pts[k + 1]
+        oled.line(x0, y0, x1, y1, 1)
+        oled.line(x0, y0 + 1, x1, y1 + 1, 1)  # หนา 2 พิกเซล
+
+
+def draw_face(mood, blink):
+    for cx, inward in ((EYE_L, 1), (EYE_R, -1)):
+        draw_eye(cx, inward, mood, blink)
+        if mood != "sleep":
+            draw_brow(cx, inward, mood)
+    if mood == "sleep":
+        oled.text("z", 108, 20)
+        oled.text("Z", 118, 12)
+
+
+def draw(counter, booking, now, online, seat, penalty, note=None, allowed=True, quiet_ms=0, calibrating=False):
+    # note = (ข้อความใหญ่, ข้อความเล็ก) หรือ None / penalty = ครั้งถัดไปจะหักเท่าไร (เว็บบอกมา)
     if oled is None:
         return
     oled.fill(0)
+    watching = booking.active(now) and allowed and not calibrating
 
-    # แถวบน: ชื่อที่นั่ง | สถานะ
+    # แถวบน: โต๊ะ (+ เตือนไปแล้วกี่ครั้ง) | สถานะ
     if TEST_MODE:
         status = "TEST"
     elif not server_ready():
@@ -641,46 +773,46 @@ def draw(db, counter, booking, now, online, seat, penalty, note, allowed=True, v
         status = "%dm LEFT" % booking.minutes_left(now)
     else:
         status = "FREE"
-    oled.text(seat[:7], 0, 0)
+    left = seat[:4]
+    if watching and counter.strikes:
+        left += " W%d" % counter.strikes
+    oled.text(left, 0, 0)
     oled.text(status, 128 - 8 * len(status), 0)
 
-    # ตัวเลข dB ตัวใหญ่
-    big_text("%d" % int(db + 0.5), 0, 12, 3)
-    oled.text("dB", 74, 28)
-
-    # นับถอยหลัง 3-2-1 (กล่องสีขาว ตัวเลขสีดำ)
-    watching = booking.active(now) and allowed
-    cd = counter.countdown() if watching else None
-    if cd is not None:
-        oled.fill_rect(96, 10, 32, 28, 1)
-        big_text(str(cd), 100, 12, 3, 0)
-    elif voice:
-        oled.text("TALK", 74, 14)  # ตรวจพบเสียงคนพูด
-
-    # แถบระดับเสียง + ขีดเกณฑ์ 65 dB
-    oled.rect(0, 42, 128, 8, 1)
-    oled.fill_rect(0, 42, db_to_x(db), 8, 1)
-    lx = db_to_x(LIMIT_DB)
-    for yy in range(39, 53, 2):
-        oled.pixel(lx, yy, 0 if 42 <= yy < 50 and lx < db_to_x(db) else 1)
-
-    # แถวล่าง
-    if note:
-        oled.text(note, 0, 56)
-    elif watching:
-        n = counter.strikes
-        oled.text(("W %d/3" % n) if n <= 3 else ("W %d" % n), 0, 56)
-        if cd is not None:
-            right = ("-%dPT" % penalty) if n + 1 >= DEDUCT_FROM_STRIKE else "WARN"
-        elif counter.loud_ms > 0:
-            right = "%d.%ds" % (counter.loud_ms // 1000, (counter.loud_ms % 1000) // 100)
+    scene = pick_scene(counter, watching, note, now)
+    if scene == "note":
+        big, small = note
+        if len(big) * 16 <= 128:
+            big_text(big, (128 - len(big) * 16) // 2, 22, 2)
         else:
-            right = ""
-        oled.text(right, 128 - 8 * len(right), 56)
-    elif not allowed:
-        oled.text("DISCONNECTED", 0, 56)
+            center_text(big, 26)
+        if small:
+            center_text(small, 46)
+    elif scene == "countdown":
+        # กล่องขาว ตัวเลขดำตัวใหญ่ + ครั้งนี้ครบแล้วจะโดนอะไร
+        oled.fill_rect(0, 11, 128, 43, 1)
+        big_text(str(counter.countdown()), 44, 12, 5, 0)
+        nxt = counter.strikes + 1
+        if nxt >= DEDUCT_FROM_STRIKE:
+            center_text("NEXT -%dPT" % penalty, 56)
+        else:
+            center_text("NEXT: " + ("GREEN" if nxt == 1 else "YELLOW"), 56)
+    elif scene == "timer":
+        center_text("QUIET FOR", 14)
+        t = fmt_quiet(quiet_ms)
+        scale = 3 if len(t) * 24 <= 128 else 2
+        big_text(t, (128 - len(t) * 8 * scale) // 2, 28 if scale == 3 else 30, scale)
+        center_text("KEEP IT UP!", 56)
     else:
-        oled.text("LIMIT %d dB" % LIMIT_DB, 0, 56)
+        mood = {"eyes": "happy", "angry": "angry", "sleep": "sleep"}[scene]
+        draw_face(mood, update_gaze(now) if mood == "happy" else False)
+        if scene == "sleep":
+            if calibrating:
+                center_text("CALIBRATING", 56)
+            elif not allowed:
+                center_text("DISCONNECTED", 56)
+            else:
+                center_text("NO BOOKING", 56)
     oled.show()
 
 
@@ -694,14 +826,15 @@ def main():
     denoiser = Denoiser()
     meter = VoiceMeter()     # กรองช่วงเสียงพูด + ตรวจว่าเป็นเสียงคนไหม
     allowed = True           # ผู้ดูแลเปิดอุปกรณ์ + การหักแต้มอยู่ไหม
-    penalty = 5              # แต้มที่หักต่อครั้ง (อัปเดตจากเว็บ)
+    penalty = 5              # ครั้งถัดไปจะหักเท่าไร (เว็บบอกมาตามระบบคะแนน — บอร์ดไม่ได้กำหนดเอง)
     seat = "TEST" if TEST_MODE else "----"
     pending = 0              # จำนวนครั้งที่รอส่งไปหักคะแนน
     last_report_try = None
     last_heartbeat = None
     force_heartbeat = True
-    note = ""
+    note = None              # ข้อความใหญ่บนจอ (บรรทัดใหญ่, บรรทัดเล็ก)
     note_until = 0
+    quiet_since = None       # เริ่มเงียบตั้งแต่เมื่อไร (ขึ้นไฟเตือน = เริ่มนับจาก 0 ใหม่)
     silent_since = None
     mic_warned = False
 
@@ -713,7 +846,6 @@ def main():
     ratio = 0.0
     modu = 0.0
     db = 0.0
-    shown_db = 0.0
     last_draw = start
     last_print = start
     online = False
@@ -756,7 +888,6 @@ def main():
             dt = min(elapsed, WINDOW_MS * 2)  # ช่วงที่บอร์ดติดคุยกับเว็บ ไม่นับเป็นเวลาดัง/เงียบ
             warm = time.ticks_diff(now, start) > WARMUP_MS
             db = denoiser.update(raw_db) if warm else max(raw_db, DB_MIN)
-            shown_db = db if db > shown_db else shown_db * 0.7 + db * 0.3  # ตัวเลขขึ้นเร็ว ลงช้า อ่านง่าย
 
             # หมดเวลาการจอง -> ดับไฟ เริ่มนับใหม่
             if booking.id is not None and not booking.active(now):
@@ -770,21 +901,25 @@ def main():
                     booking.start_test(now)
 
             if booking.active(now) and allowed and warm and not denoiser.calibrating():
+                if quiet_since is None:
+                    quiet_since = now  # เริ่มเฝ้าเสียง = เริ่มจับเวลาที่เงียบ
                 # นับเฉพาะเสียงคนพูด: เสียงอื่น (พัดลม เครื่องจักร เสียงบี๊บ) ถือว่าเงียบ
                 loud_db = db if (voice or not VOICE_ONLY) else DB_MIN
                 if counter.update(loud_db, dt):
                     n = counter.strikes
                     show_leds(n)
+                    quiet_since = now  # ขึ้นไฟเตือน -> เวลาที่เงียบกลับเป็น 0 เริ่มจับใหม่
                     if n >= DEDUCT_FROM_STRIKE:
                         pending += 1
-                        note = "-%d POINTS!" % penalty
-                        print(">> เสียงดังครั้งที่ %d — ไฟแดง ส่งไปหักคะแนน %d แต้ม" % (n, penalty))
+                        note = ("-%d PT" % penalty, "RED LIGHT")
+                        print(">> เสียงดังครั้งที่ %d — ไฟแดง ส่งไปให้เว็บหักคะแนน (ระบบคะแนนแจ้งว่าครั้งนี้ %d)" % (n, penalty))
                     else:
-                        note = "WARNING %d/3" % n
+                        note = ("WARN %d" % n, "GREEN LIGHT" if n == 1 else "YELLOW LIGHT")
                         print(">> เสียงดังครั้งที่ %d — ไฟ%s" % (n, "เขียว" if n == 1 else "เหลือง"))
                     note_until = time.ticks_add(now, NOTE_MS)
             else:
                 counter.pause()
+                quiet_since = None
 
         # ---------- ปุ่ม BOOT: เริ่มรอบใหม่ (ใช้ตอนทดสอบ) ----------
         if boot_button.value() == 0:
@@ -793,7 +928,8 @@ def main():
             pending = 0
             if TEST_MODE:
                 booking.start_test(now)
-            note = "RESET"
+            note = ("RESET", "")
+            quiet_since = None
             note_until = time.ticks_add(now, NOTE_MS)
             print("กดปุ่ม BOOT — เริ่มนับใหม่")
             while boot_button.value() == 0:
@@ -812,14 +948,19 @@ def main():
                     last_report_try is None or time.ticks_diff(now, last_report_try) >= REPORT_RETRY_MS
                 ):
                     last_report_try = now
-                    draw(shown_db, counter, booking, now, online, seat, penalty, "SENDING...", allowed, voice)
+                    draw(counter, booking, now, online, seat, penalty, ("SENDING", ""), allowed)
                     res = call_rpc("report_noise", db)
                     if res is not None:
                         pending -= 1
                         status = res.get("status")
                         print("[report_noise] %s" % res)
                         if status == "DEDUCTED":
-                            note = "SENT -%d PTS" % res.get("penalty", penalty)
+                            # จำนวนที่หักจริงตามระบบคะแนนบนเว็บ
+                            note = ("-%d PT" % res.get("penalty", penalty), "DEDUCTED")
+                            note_until = time.ticks_add(time.ticks_ms(), NOTE_MS)
+                            force_heartbeat = True  # ถามเว็บว่าครั้งถัดไปจะหักเท่าไร (ระบบหักแรงขึ้นทีละขั้น)
+                        elif status == "DAILY_CAP":
+                            note = ("DAY MAX", "NO MORE TODAY")  # วันนี้โดนหักครบยอดสูงสุดแล้ว
                             note_until = time.ticks_add(time.ticks_ms(), NOTE_MS)
                         elif status == "COOLDOWN":
                             print("!! เว็บยังอยู่ในช่วงพัก — ตั้ง 'ช่วงพักหลังหักแต้ม' ในหน้าผู้ดูแลเป็น 5 วินาที")
@@ -840,17 +981,18 @@ def main():
                         allowed, penalty, seat, changed = apply_status(res, booking, counter, time.ticks_ms())
                         if changed:
                             pending = 0
+                            quiet_since = None
                     win_start = time.ticks_ms()
                     meter.discard()
                     chunks = 0
 
         # ---------- จอ + Shell ----------
         if note and time.ticks_diff(now, note_until) > 0:
-            note = ""
+            note = None
         if time.ticks_diff(now, last_draw) >= DRAW_MS:
             last_draw = now
-            draw(shown_db, counter, booking, now, online, seat, penalty,
-                 note or ("CALIBRATING" if denoiser.calibrating() else ""), allowed, voice)
+            quiet_ms = time.ticks_diff(now, quiet_since) if quiet_since is not None else 0
+            draw(counter, booking, now, online, seat, penalty, note, allowed, quiet_ms, denoiser.calibrating())
         if time.ticks_diff(now, last_print) >= PRINT_MS:
             last_print = now
             raw = " (ดิบ %.1f, พื้นหลัง %.1f)" % (raw_db, denoiser.floor) if DENOISE and denoiser.floor is not None else ""
