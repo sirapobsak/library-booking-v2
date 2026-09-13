@@ -521,49 +521,139 @@ def server_ready():
 last_wifi_try = None
 last_allowed = True   # ผู้ดูแลเชื่อมต่อเซนเซอร์นี้อยู่ไหม (ครั้งก่อน) — ใช้ดูว่าเพิ่งถูกตัด/เชื่อมต่อ
 last_seat = None      # โต๊ะที่ผูกอยู่ (ครั้งก่อน) — ใช้ดูว่าผู้ดูแลเพิ่งย้ายโต๊ะ
+wifi_announced = False  # พิมพ์ "ต่อ WiFi สำเร็จ" ไปแล้วหรือยัง
+last_rpc_error = None   # คุยกับเว็บครั้งล่าสุดพังเพราะอะไร (None = ครั้งล่าสุดสำเร็จ)
+web_seen = False        # เคยคุยกับเว็บสำเร็จแล้วหรือยัง
+
+
+def wifi_status_text():
+    # แปลสถานะ WiFi เป็นภาษาไทย (ช่วยหาสาเหตุตอนต่อไม่ติด)
+    try:
+        st = wlan.status()
+    except Exception:
+        return "ไม่ทราบสถานะ"
+    for attr, text in (
+        ("STAT_WRONG_PASSWORD", "รหัส WiFi ผิด"),
+        ("STAT_NO_AP_FOUND", "ไม่เจอชื่อ WiFi นี้ (ต้องเป็น 2.4 GHz และอยู่ใกล้เราเตอร์)"),
+        ("STAT_CONNECT_FAIL", "ต่อไม่สำเร็จ"),
+        ("STAT_CONNECTING", "กำลังต่อ"),
+        ("STAT_IDLE", "ยังไม่ได้เริ่มต่อ"),
+    ):
+        if st == getattr(network, attr, None):
+            return text
+    # ESP32 บางเฟิร์มแวร์ส่งรหัสเหตุผลมาเป็นตัวเลข
+    return {
+        201: "ไม่เจอชื่อ WiFi นี้ (ต้องเป็น 2.4 GHz และอยู่ใกล้เราเตอร์)",
+        202: "รหัส WiFi ผิด",
+        203: "เราเตอร์ไม่ให้ต่อ",
+        204: "รหัส WiFi ผิด หรือสัญญาณอ่อน",
+        15: "รหัส WiFi ผิด (ยืนยันตัวไม่ผ่าน)",
+        2: "เราเตอร์ตัดการยืนยันตัว",
+    }.get(st, "สถานะ %s" % st)
 
 
 def keep_wifi(now):
-    # ต่อ WiFi แบบไม่รอ (จอไม่ค้าง) — หลุดเมื่อไรลองใหม่ทุก 20 วินาที
-    global last_wifi_try
+    # ต่อ WiFi แบบไม่รอ (จอไม่ค้าง) — ต่อไม่ติด/หลุดเมื่อไร ตัดแล้วต่อใหม่ทุก 20 วินาที
+    global last_wifi_try, wifi_announced
     if wlan.isconnected():
+        if not wifi_announced:
+            wifi_announced = True
+            print("ต่อ WiFi \"%s\" สำเร็จ — IP %s" % (WIFI_SSID, wlan.ifconfig()[0]))
         return True
+    if wifi_announced:
+        wifi_announced = False
+        print("!! WiFi หลุด — กำลังต่อใหม่")
     if last_wifi_try is None or time.ticks_diff(now, last_wifi_try) > WIFI_RETRY_MS:
+        if last_wifi_try is not None:
+            print("!! ยังต่อ WiFi \"%s\" ไม่ได้ — %s (ลองใหม่)" % (WIFI_SSID, wifi_status_text()))
+            try:
+                wlan.disconnect()  # ล้างสถานะค้างก่อนต่อใหม่
+            except Exception:
+                pass
         last_wifi_try = now
         wlan.active(True)
         try:
             wlan.connect(WIFI_SSID, WIFI_PASS)
-        except OSError:
-            pass  # กำลังต่ออยู่แล้ว
+        except OSError as e:
+            print("!! สั่งต่อ WiFi ไม่ได้: %s" % e)
         print("กำลังต่อ WiFi \"%s\" ..." % WIFI_SSID)
     return False
 
 
+def rpc_error_hint(e):
+    # แปลข้อผิดพลาดตอนส่งข้อมูลเป็นภาษาไทย
+    msg = str(e)
+    if "-202" in msg or "EHOSTUNREACH" in msg:
+        return "หาเว็บไม่เจอ — WiFi นี้ออกอินเทอร์เน็ตได้ไหม (ลองเปิดเว็บจากมือถือที่ต่อ WiFi เดียวกัน)"
+    if "ENOMEM" in msg or "-17040" in msg or isinstance(e, MemoryError):
+        return "หน่วยความจำบอร์ดไม่พอสำหรับ HTTPS — กด Stop/Restart"
+    if "ETIMEDOUT" in msg or "110" in msg or "timed out" in msg:
+        return "หมดเวลารอเว็บ — เน็ตช้าหรือ WiFi นี้บล็อกเว็บภายนอก"
+    if "-29" in msg or "SSL" in msg or "ECONNRESET" in msg or "104" in msg:
+        return "เชื่อมต่อแบบปลอดภัย (HTTPS) ไม่สำเร็จ — ลองใหม่อัตโนมัติ / ถ้าเป็นตลอด อัปเดตเฟิร์มแวร์ MicroPython"
+    return "%s %s" % (type(e).__name__, msg)
+
+
 def call_rpc(fn, level):
     # เรียกฟังก์ชันบนเว็บ: POST <SUPABASE_URL>/rest/v1/rpc/<fn>  -> คืนผลเป็น dict (ไม่สำเร็จคืน None)
-    gc.collect()  # HTTPS ใช้หน่วยความจำเยอะ เก็บกวาดก่อน
+    global last_rpc_error, web_seen
     body = json.dumps({"p_device": DEVICE_ID, "p_key": DEVICE_KEY, "p_level": int(level)})
     headers = {"Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY}
     url = SUPABASE_URL + "/rest/v1/rpc/" + fn
-    try:
+    for attempt in (1, 2):  # พลาดครั้งแรก (มักเป็นหน่วยความจำ/HTTPS สะดุด) เก็บกวาดแล้วลองอีกรอบ
+        gc.collect()  # HTTPS ใช้หน่วยความจำเยอะ เก็บกวาดก่อน
         try:
-            r = requests.post(url, data=body, headers=headers, timeout=10)
-        except TypeError:  # เฟิร์มแวร์เก่า requests ไม่มี timeout
-            r = requests.post(url, data=body, headers=headers)
-        code, text = r.status_code, r.text
-        r.close()
-    except Exception as e:
-        print("[%s] ส่งไม่สำเร็จ: %s" % (fn, e))
-        return None
+            try:
+                r = requests.post(url, data=body, headers=headers, timeout=10)
+            except TypeError:  # เฟิร์มแวร์เก่า requests ไม่มี timeout
+                r = requests.post(url, data=body, headers=headers)
+            code, text = r.status_code, r.text
+            r.close()
+            break
+        except Exception as e:
+            last_rpc_error = "ส่งไม่สำเร็จ: " + rpc_error_hint(e)
+            print("[%s] %s (ครั้งที่ %d)" % (fn, last_rpc_error, attempt))
+            if attempt == 2:
+                return None
     if code != 200:
-        print("[%s] HTTP %d %s" % (fn, code, text))
         if "BAD_DEVICE" in text:
-            print("!! DEVICE_ID หรือ DEVICE_KEY ไม่ถูกต้อง — กด 'สร้างคีย์ใหม่' ในหน้าผู้ดูแล")
+            last_rpc_error = "คีย์อุปกรณ์ไม่ถูกต้อง (BAD_DEVICE) — วางค่าจากหน้าผู้ดูแลใหม่"
+        elif code == 401:
+            last_rpc_error = "SUPABASE_ANON_KEY ไม่ถูกต้อง (HTTP 401)"
+        elif code == 404:
+            last_rpc_error = "ไม่เจอฟังก์ชัน %s บนเว็บ — รัน supabase/points.sql (HTTP 404)" % fn
+        else:
+            last_rpc_error = "เว็บตอบ HTTP %d" % code
+        print("[%s] HTTP %d %s" % (fn, code, text[:200]))
+        print("!! " + last_rpc_error)
         return None
     try:
-        return json.loads(text)
+        data = json.loads(text)
     except ValueError:
+        last_rpc_error = "เว็บตอบกลับมาอ่านไม่ออก"
         return None
+    if last_rpc_error or not web_seen:
+        print("คุยกับเว็บได้แล้ว (%s)" % fn)
+    last_rpc_error = None
+    web_seen = True
+    return data
+
+
+def idle_reason(online, allowed, seat):
+    # ตอนนี้ทำไมยังไม่เฝ้าเสียง — พิมพ์ลง Shell ทุกวินาที ช่วยหาสาเหตุ
+    if TEST_MODE:
+        return "TEST_MODE"
+    if not server_ready():
+        return "ยังไม่ได้ตั้งค่า WiFi/เว็บ (ส่วนที่ 1)"
+    if not online:
+        return "ยังต่อ WiFi \"%s\" ไม่ได้ — %s" % (WIFI_SSID, wifi_status_text())
+    if last_rpc_error:
+        return "ยังคุยกับเว็บไม่ได้ — " + last_rpc_error
+    if not web_seen:
+        return "ต่อ WiFi แล้ว กำลังถามเว็บ..."
+    if not allowed:
+        return "ผู้ดูแลตัดการเชื่อมต่อเซนเซอร์นี้"
+    return "เว็บยืนยันแล้ว: โต๊ะ %s ไม่มีการจองตอนนี้" % seat
 
 
 def apply_status(res, booking, counter, now):
@@ -767,6 +857,8 @@ def draw(counter, booking, now, online, seat, penalty, note=None, allowed=True, 
         status = "NO SETUP"
     elif not online:
         status = "NO WIFI"
+    elif last_rpc_error:
+        status = "BAD KEY" if "BAD_DEVICE" in last_rpc_error else "WEB ERR"  # รายละเอียดดูใน Shell
     elif not allowed:
         status = "OFF"  # ผู้ดูแลตัดการเชื่อมต่อ
     elif booking.active(now):
@@ -811,6 +903,8 @@ def draw(counter, booking, now, online, seat, penalty, note=None, allowed=True, 
                 center_text("CALIBRATING", 56)
             elif not allowed:
                 center_text("DISCONNECTED", 56)
+            elif not TEST_MODE and server_ready() and (not online or last_rpc_error):
+                center_text("SEE SHELL", 56)  # ต่อ WiFi/เว็บไม่ได้ — สาเหตุพิมพ์อยู่ใน Shell
             else:
                 center_text("NO BOOKING", 56)
     oled.show()
@@ -1005,7 +1099,7 @@ def main():
                        booking.minutes_left(now))
                 )
             else:
-                print("dB %.1f%s | ไม่มีการจองตอนนี้" % (db, raw))
+                print("dB %.1f%s | %s" % (db, raw, idle_reason(online, allowed, seat)))
 
 
 if __name__ == "__main__":
