@@ -68,8 +68,9 @@ DB_OFFSET = 0.0            # ปรับให้ตรงกับแอปว
 
 # ---------- ลดเสียงรบกวน (denoise) ----------
 DENOISE = True             # True = หักเสียงพื้นหลัง + ตัดเสียงกระแทกสั้น ๆ / False = ใช้ค่าดิบจากไมค์
-CALIBRATE_SECONDS = 3      # หลังเปิดเครื่อง ฟังเสียงพื้นหลังของห้องกี่วินาที (ช่วงนี้ขอให้เงียบ)
+CALIBRATE_SECONDS = 15     # หลังเปิดเครื่อง ฟังเสียงพื้นหลังของห้องกี่วินาที (ช่วงนี้ขอให้เงียบ — นานขึ้น = วัดแม่นขึ้น)
 FLOOR_MAX_DB = 72          # เสียงพื้นหลังที่ยอมหักออกได้สูงสุด (ห้องมีแอร์/พัดลมใกล้ ๆ อาจถึง ~67 dB)
+ABOVE_FLOOR_DB = 6         # ต้องดังกว่าเสียงพื้นหลังของห้องอย่างน้อยกี่ dB ถึงนับว่าดัง (พูดเบา ๆ ในห้องที่มีแอร์/พัดลม ไม่นับ)
 MEDIAN_WINDOWS = 5         # ตัดเสียงกระแทกสั้นกว่า ~0.3 วิ (ใช้ค่ากลางของ 5 ช่วงล่าสุด = 0.625 วิ)
 DB_MIN = 30                # ค่าต่ำสุดที่แสดง (เงียบมาก)
 
@@ -278,6 +279,12 @@ class Denoiser:
     def calibrating(self):
         return DENOISE and self.floor is None
 
+    def calib_left(self):
+        # วัดเสียงพื้นหลังเหลืออีกกี่วินาที (0 = เสร็จแล้ว หรือไม่ได้เปิด denoise)
+        if not self.calibrating():
+            return 0
+        return max(1, CALIBRATE_SECONDS - len(self.calib) * WINDOW_MS // 1000)
+
     def update(self, db_raw):
         # ใส่ค่า dB ดิบจากไมค์ -> คืนค่า dB หลังลดเสียงรบกวน
         if not DENOISE:
@@ -289,7 +296,8 @@ class Denoiser:
             if len(self.calib) * WINDOW_MS >= CALIBRATE_SECONDS * 1000:
                 self.floor = min(median(self.calib), FLOOR_MAX_DB)
                 self.calib = []
-                print("วัดเสียงพื้นหลังเสร็จ: %.1f dB" % self.floor)
+                need = max(self.floor + ABOVE_FLOOR_DB, 10 * math.log10(10 ** (LIMIT_DB / 10) + 10 ** (self.floor / 10)))
+                print("วัดเสียงพื้นหลังเสร็จ: %.1f dB — เสียงพูดต้องดังถึง ~%.1f dB (ค่าดิบ) ถึงนับว่าดัง" % (self.floor, need))
             return max(db_raw, DB_MIN)
 
         # ปรับระดับเสียงพื้นหลังตามห้อง:
@@ -302,9 +310,13 @@ class Denoiser:
         self.floor = min(self.floor, FLOOR_MAX_DB)
 
         # หักพลังงานเสียงพื้นหลังออก (เสียงรวมกันแบบบวกพลังงาน ไม่ใช่บวกเลข dB ตรง ๆ)
-        p = 10 ** (db_raw / 10) - 10 ** (self.floor / 10)
-        clean = 10 * math.log10(p) if p > 1 else 0.0
-        clean = max(clean, DB_MIN)
+        #   ดังกว่าพื้นหลังไม่ถึง ABOVE_FLOOR_DB = ยังกลืนกับเสียงห้อง (เช่นพูดเบา ๆ ข้างแอร์) -> ไม่นับ
+        if db_raw < self.floor + ABOVE_FLOOR_DB:
+            clean = DB_MIN
+        else:
+            p = 10 ** (db_raw / 10) - 10 ** (self.floor / 10)
+            clean = 10 * math.log10(p) if p > 1 else 0.0
+            clean = max(clean, DB_MIN)
 
         # ตัดเสียงกระแทก: ค่ากลางของ 5 ช่วงล่าสุด (เสียงที่ดังแค่ 1–2 ช่วง ~0.25 วิ จะหายไป)
         self.history.append(clean)
@@ -895,7 +907,7 @@ def draw(counter, booking, now, problem, seat, penalty, note=None, allowed=True,
         draw_face(mood, update_gaze(now) if mood == "happy" else False)
         if scene == "sleep":
             if calibrating:
-                center_text("CALIBRATING", 56)
+                center_text("CALIBRATE %ds" % calibrating, 56)  # กำลังฟังเสียงพื้นหลัง เหลือกี่วินาที
             elif not allowed:
                 center_text("DISCONNECTED", 56)
             elif not TEST_MODE and problem:
@@ -1068,14 +1080,16 @@ def main():
         if time.ticks_diff(now, last_draw) >= DRAW_MS:
             last_draw = now
             quiet_ms = time.ticks_diff(now, quiet_since) if quiet_since is not None else 0
-            draw(counter, booking, now, problem, seat, penalty, note, allowed, quiet_ms, denoiser.calibrating())
+            draw(counter, booking, now, problem, seat, penalty, note, allowed, quiet_ms, denoiser.calib_left())
         if time.ticks_diff(now, last_print) >= PRINT_MS:
             last_print = now
             gc.collect()  # เก็บกวาดหน่วยความจำทุกวินาที
             raw = " (ดิบ %.1f, พื้นหลัง %.1f)" % (raw_db, denoiser.floor) if DENOISE and denoiser.floor is not None else ""
             if VOICE_ONLY:
                 raw += " | %s (ช่วงพูด %d%%, จังหวะ %.1f dB)" % ("เสียงคน" if voice else "ไม่ใช่เสียงคน", int(ratio * 100), modu)
-            if booking.active(now):
+            if denoiser.calibrating():
+                print("กำลังฟังเสียงพื้นหลังของห้อง... เหลือ %d วินาที (ขอให้เงียบ) | dB ดิบ %.1f" % (denoiser.calib_left(), raw_db))
+            elif booking.active(now):
                 print(
                     "dB %.1f%s | ดังสะสม %.1f วิ | ครั้งที่ %d | จอง %s–%s เหลือ %d นาที"
                     % (db, raw, counter.loud_ms / 1000, counter.strikes, booking.start, booking.end,
