@@ -24,8 +24,8 @@ SAMPLE_RATE = 16000
 MIC_SENSITIVITY_DBFS = -26   # INMP441: เสียง 94 dB อ่านได้ -26 dBFS
 CHUNK_BYTES = 2048           # อ่านทีละ 512 ค่า (ตัวกรองรองรับสูงสุดเท่านี้ — ห้ามเพิ่ม)
 PRINT_MS = 500
-SPEECH_RATIO_MIN = 0.35      # เกณฑ์เดียวกับ main.py
-SPEECH_MOD_DB = 4.0
+SPEECH_RATIO_MIN = 0.5       # เกณฑ์เดียวกับ main.py: ของเสียงเหนือ 250 Hz อยู่ในช่วงพูดกี่ส่วน
+SPEECH_MOD_DB = 6.0          # ช่วงดัง-ช่วงเบาของพยางค์ใน 1 วิ ต่างกันกี่ dB
 LIMIT_DB = 65
 
 buf = bytearray(CHUNK_BYTES)
@@ -80,6 +80,7 @@ def speech_filter(buf, nbytes: int, sums, st, co) -> int:
     le = s[12]
     band = 0
     total = 0
+    hpe = 0
     cnt = 0
     blk = 0
     nz = 0
@@ -107,6 +108,8 @@ def speech_filter(buf, nbytes: int, sums, st, co) -> int:
         hx1 = d
         hy2 = hy1
         hy1 = h
+        hq = (h + 2) >> 2  # พลังงานเหนือ 250 Hz (ไม่รวมเสียงหึ่งต่ำ)
+        hpe += hq * hq
         acc = lb0 * h + lb1 * lx1 + lb2 * lx2 - la1 * ly1 - la2 * ly2 + le
         y = acc >> 12
         le = acc - (y << 12)
@@ -122,14 +125,17 @@ def speech_filter(buf, nbytes: int, sums, st, co) -> int:
         if cnt == 8:
             out[blk] = band
             out[32 + blk] = total
+            out[65 + blk] = hpe
             blk += 1
             band = 0
             total = 0
+            hpe = 0
             cnt = 0
         i += 8
     if cnt > 0 and blk < 32:
         out[blk] = band
         out[32 + blk] = total
+        out[65 + blk] = hpe
         blk += 1
     out[64] = nz
     s[0] = dx1
@@ -186,12 +192,13 @@ def level_db(mean_square):
     return to_db(math.sqrt(mean_square) * 1024) if mean_square > 0 else 0.0
 
 
-def stdev(values):
+def spread(values):
+    # จังหวะพยางค์: ต่างระหว่างช่วงดัง (90%) กับช่วงเบา (10%) — ไม่ถูกเสียงพื้นหลังดัง ๆ กดให้ดูเรียบ
     n = len(values)
-    if n < 2:
+    if n < 5:
         return 0.0
-    mean = sum(values) / n
-    return math.sqrt(sum((v - mean) ** 2 for v in values) / n)
+    s = sorted(values)
+    return s[n * 9 // 10] - s[n // 10]
 
 
 class Band:
@@ -200,16 +207,18 @@ class Band:
         fs = SAMPLE_RATE // 2
         self.co = array("i", biquad_q12("hp", low_hz, fs) + biquad_q12("lp", high_hz, fs))
         self.st = array("i", [0] * 13)
-        self.sums = array("i", [0] * 65)
+        self.sums = array("i", [0] * 97)
 
     def feed(self, b, n):
         blocks = speech_filter(b, n, self.sums, self.st, self.co)
         band = 0
         total = 0
+        hp = 0
         for k in range(blocks):
             band += self.sums[k]
             total += self.sums[32 + k]
-        return band, total
+            hp += self.sums[65 + k]
+        return band, total, hp
 
 
 # ============================================================
@@ -256,13 +265,13 @@ def stereo_check(seconds=4):
 def meter(seconds=None):
     print("\n=== ขั้นที่ 2: วัดเสียงต่อเนื่อง (กด Stop เพื่อหยุด) ===")
     print("ลอง: เงียบ 5 วิ -> พูดปกติ -> พูดดัง -> ตบมือ -> เป่าลม")
-    print("เป็นเสียงพูด = ช่วงพูด >= %d%% และ จังหวะ >= %.0f dB  |  นับว่าดัง = ช่วงพูดเกิน %d dB" % (
+    print("เป็นเสียงพูด = ช่วงพูด(ของเสียงเหนือ 250 Hz) >= %d%% และ จังหวะดัง-เบา >= %.0f dB  |  นับว่าดัง = ช่วงพูดเกิน %d dB" % (
         int(SPEECH_RATIO_MIN * 100), SPEECH_MOD_DB, LIMIT_DB))
     mic = open_mic(I2S.MONO)  # แบบเดียวกับ main.py
     speech = Band(250, 3400)  # ช่วงเสียงพูด (เหมือน main.py)
     low = Band(30, 250)       # เสียงหึ่งความถี่ต่ำ (แอร์ พัดลม ไฟฟ้า)
     levels = []               # dB ช่วงพูดของแต่ละก้อน ~1 วินาทีล่าสุด (ดูจังหวะพยางค์)
-    e_speech = e_low = e_total = 0
+    e_speech = e_low = e_total = e_hp = 0
     pairs = 0
     st = new_stats()
     t0 = last = time.ticks_ms()
@@ -271,13 +280,14 @@ def meter(seconds=None):
             n = mic.readinto(buf)
             if not n:
                 continue
-            sb, tot = speech.feed(buf, n)
-            lb, _ = low.feed(buf, n)
+            sb, tot, hp = speech.feed(buf, n)
+            lb, _, _ = low.feed(buf, n)
             raw_stats(buf, n, st, 0)
             p = n // 8
             e_speech += sb
             e_low += lb
             e_total += tot
+            e_hp += hp
             pairs += p
             levels.append(max(level_db(sb / p), 30.0))
             if len(levels) > 31:
@@ -285,27 +295,28 @@ def meter(seconds=None):
             now = time.ticks_ms()
             if time.ticks_diff(now, last) >= PRINT_MS and pairs:
                 last = now
-                report(e_speech, e_low, e_total, pairs, levels, st, n_samples=pairs * 2)
-                e_speech = e_low = e_total = 0
+                report(e_speech, e_low, e_total, e_hp, pairs, levels, st, n_samples=pairs * 2)
+                e_speech = e_low = e_total = e_hp = 0
                 pairs = 0
                 st = new_stats()
     finally:
         mic.deinit()
 
 
-def report(e_speech, e_low, e_total, pairs, levels, st, n_samples):
+def report(e_speech, e_low, e_total, e_hp, pairs, levels, st, n_samples):
     total_db = level_db(e_total / pairs)
     speech_db = level_db(e_speech / pairs)
     tot = e_total if e_total > 0 else 1
     sp = min(100, 100 * e_speech // tot)
     lo = min(100 - sp, 100 * e_low // tot)
     other = max(0, 100 - sp - lo)
-    mod = stdev(levels)
-    voice = e_speech / tot >= SPEECH_RATIO_MIN and mod >= SPEECH_MOD_DB
+    mod = spread(levels)
+    ratio = e_speech / e_hp if e_hp > 0 else 0
+    voice = ratio >= SPEECH_RATIO_MIN and mod >= SPEECH_MOD_DB
     bar = "#" * int(max(0, min(20, (speech_db - 30) / 3)))
     tag = ("เสียงพูด ✓" + (" ดังเกิน!" if speech_db > LIMIT_DB else "")) if voice else "ไม่ใช่เสียงพูด"
-    print("ทั้งหมด %5.1f dB | ช่วงพูด %5.1f dB %-20s | ต่ำ %3d%% พูด %3d%% อื่น %3d%% | จังหวะ %4.1f dB | %s" % (
-        total_db, speech_db, bar, lo, sp, other, mod, tag))
+    print("ทั้งหมด %5.1f dB | ช่วงพูด %5.1f dB %-20s | ต่ำ %3d%% พูด %3d%% อื่น %3d%% | พูด/เหนือ250 %3d%% | จังหวะ %4.1f dB | %s" % (
+        total_db, speech_db, bar, lo, sp, other, min(100, int(100 * ratio)), mod, tag))
     peak = max(abs(st[0]), abs(st[1]))
     if st[2] > n_samples * 0.9:
         print("   !! ไมค์ส่งแต่ค่า 0 — เช็คสาย SD->D23 / L/R->GND / VDD->3V3")

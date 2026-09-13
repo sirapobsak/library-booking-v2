@@ -69,7 +69,7 @@ DB_OFFSET = 0.0            # ปรับให้ตรงกับแอปว
 # ---------- ลดเสียงรบกวน (denoise) ----------
 DENOISE = True             # True = หักเสียงพื้นหลัง + ตัดเสียงกระแทกสั้น ๆ / False = ใช้ค่าดิบจากไมค์
 CALIBRATE_SECONDS = 3      # หลังเปิดเครื่อง ฟังเสียงพื้นหลังของห้องกี่วินาที (ช่วงนี้ขอให้เงียบ)
-FLOOR_MAX_DB = 55          # เสียงพื้นหลังที่ยอมหักออกได้สูงสุด (กันเปิดเครื่องตอนคนคุยแล้วหักเยอะเกิน)
+FLOOR_MAX_DB = 72          # เสียงพื้นหลังที่ยอมหักออกได้สูงสุด (ห้องมีแอร์/พัดลมใกล้ ๆ อาจถึง ~67 dB)
 MEDIAN_WINDOWS = 5         # ตัดเสียงกระแทกสั้นกว่า ~0.3 วิ (ใช้ค่ากลางของ 5 ช่วงล่าสุด = 0.625 วิ)
 DB_MIN = 30                # ค่าต่ำสุดที่แสดง (เงียบมาก)
 
@@ -77,8 +77,8 @@ DB_MIN = 30                # ค่าต่ำสุดที่แสดง (�
 VOICE_ONLY = True          # True = นับเฉพาะเสียงคนพูด (พัดลม เครื่องจักร เสียงบี๊บ ไม่นับ) / False = นับทุกเสียง
 SPEECH_LOW_HZ = 250        # ช่วงความถี่เสียงพูด ต่ำสุด — ตัดเสียงหึ่งของแอร์ พัดลม ไฟฟ้า
 SPEECH_HIGH_HZ = 3400      # ช่วงความถี่เสียงพูด สูงสุด — ตัดเสียงซ่า เสียงแหลม
-SPEECH_RATIO_MIN = 0.35    # พลังงานเสียงต้องอยู่ในช่วงเสียงพูดอย่างน้อยกี่ส่วน (0–1)
-SPEECH_MOD_DB = 4.0        # เสียงต้องขึ้น-ลงเป็นพยางค์อย่างน้อยกี่ dB (เสียงคงที่อย่างพัดลม ~1 dB)
+SPEECH_RATIO_MIN = 0.5     # ของเสียงที่สูงกว่า 250 Hz ต้องอยู่ในช่วงเสียงพูดอย่างน้อยกี่ส่วน (0–1) — เสียงหึ่งต่ำไม่นับ
+SPEECH_MOD_DB = 6.0        # ใน 1 วิ ช่วงดังกับช่วงเบาของพยางค์ต้องต่างกันอย่างน้อยกี่ dB (พัดลม/เสียงซ่า ~1 dB)
 MOD_CHUNKS = 31            # ดูจังหวะขึ้น-ลงย้อนหลังกี่ก้อน (~1 วินาที)
 
 # ---------- โหมดทดสอบ ----------
@@ -143,7 +143,8 @@ def speech_filter(buf, nbytes: int, sums, st, co) -> int:
     #  2) ตัดค่า DC  3) กรองผ่านสูง (ตัดเสียงหึ่ง)  4) กรองผ่านต่ำ (ตัดเสียงซ่า)
     #  ทุกขั้น "เก็บเศษ" ที่หายไปตอน >>12 ไว้บวกรอบถัดไป — ถ้าตัดทิ้งเฉย ๆ ตัวกรองจะเพี้ยนจนเสียงดังเกินจริง
     #  หรือสั่นค้างเองตอนห้องเงียบ
-    #  ผลรวมกำลังสองทุก 8 ค่า: sums[0..31] = เฉพาะช่วงเสียงพูด, sums[32..63] = ทั้งหมด, sums[64] = ค่าที่ไม่ใช่ 0
+    #  ผลรวมกำลังสองทุก 8 ค่า: sums[0..31] = เฉพาะช่วงเสียงพูด, sums[32..63] = ทั้งหมด, sums[64] = ค่าที่ไม่ใช่ 0,
+    #                          sums[65..96] = ทุกอย่างเหนือ 250 Hz
     #  ตัวเลขทุกตัวไม่เกินขนาด int 32 บิต แม้เสียงดังสุดที่ไมค์รับได้ (ชุดทดสอบมีเคสนี้)
     b = ptr8(buf)
     out = ptr32(sums)
@@ -174,6 +175,7 @@ def speech_filter(buf, nbytes: int, sums, st, co) -> int:
     le = s[12]
     band = 0
     total = 0
+    hpe = 0
     cnt = 0
     blk = 0
     nz = 0
@@ -202,6 +204,8 @@ def speech_filter(buf, nbytes: int, sums, st, co) -> int:
         hx1 = d
         hy2 = hy1
         hy1 = h
+        hq = (h + 2) >> 2  # พลังงานเหนือ 250 Hz (ไม่รวมเสียงหึ่งต่ำ)
+        hpe += hq * hq
         acc = lb0 * h + lb1 * lx1 + lb2 * lx2 - la1 * ly1 - la2 * ly2 + le
         y = acc >> 12  # ผ่านต่ำ
         le = acc - (y << 12)
@@ -217,14 +221,17 @@ def speech_filter(buf, nbytes: int, sums, st, co) -> int:
         if cnt == 8:
             out[blk] = band
             out[32 + blk] = total
+            out[65 + blk] = hpe
             blk += 1
             band = 0
             total = 0
+            hpe = 0
             cnt = 0
         i += 8
     if cnt > 0 and blk < 32:
         out[blk] = band
         out[32 + blk] = total
+        out[65 + blk] = hpe
         blk += 1
     out[64] = nz
     s[0] = dx1
@@ -313,25 +320,27 @@ def level_db(mean_square):
     return to_db(math.sqrt(mean_square) * 1024)
 
 
-def stdev(values):
+def spread(values):
+    # จังหวะพยางค์: ต่างระหว่างช่วงดัง (90%) กับช่วงเบา (10%) — ไม่ถูกเสียงพื้นหลังดัง ๆ กดให้ดูเรียบ
     n = len(values)
-    if n < 2:
+    if n < 5:
         return 0.0
-    mean = sum(values) / n
-    return math.sqrt(sum((v - mean) ** 2 for v in values) / n)
+    s = sorted(values)
+    return s[n * 9 // 10] - s[n // 10]
 
 
 class VoiceMeter:
     # จับเฉพาะเสียงคนพูด
     #  - วัดความดังเฉพาะช่วงความถี่เสียงพูด (SPEECH_LOW_HZ–SPEECH_HIGH_HZ)
-    #  - "เป็นเสียงคน" = พลังงานส่วนใหญ่อยู่ในช่วงเสียงพูด และขึ้น-ลงเป็นจังหวะพยางค์
+    #  - "เป็นเสียงคน" = เสียงที่สูงกว่า 250 Hz ส่วนใหญ่อยู่ในช่วงเสียงพูด และดัง-เบาเป็นจังหวะพยางค์
+    #    (ใช้ได้แม้ห้องมีแอร์/พัดลมดัง: ไม่เอาเสียงหึ่งต่ำมาคิด และดูช่วงดังเทียบช่วงเบา ไม่ใช่ค่าเบี่ยงเบน)
     #    (พัดลม เสียงซ่า เสียงบี๊บ ดังเท่ากันตลอด / เสียงหึ่งเครื่องจักรอยู่นอกช่วง -> ไม่ใช่เสียงคน)
     FS = SAMPLE_RATE // 2  # หลังรวม 2 ค่าเป็น 1 เหลือ 8 kHz
 
     def __init__(self):
         self.coef = array("i", biquad_q12("hp", SPEECH_LOW_HZ, self.FS) + biquad_q12("lp", SPEECH_HIGH_HZ, self.FS))
         self.state = array("i", [0] * 13)
-        self.sums = array("i", [0] * 65)
+        self.sums = array("i", [0] * 97)
         self.levels = []  # ความดังช่วงเสียงพูดของแต่ละก้อน (~32 ms) ย้อนหลัง ~1 วินาที
         self.discard()
 
@@ -339,6 +348,7 @@ class VoiceMeter:
         # ทิ้งค่าที่สะสมไว้ (ใช้หลังบอร์ดติดคุยกับเว็บ)
         self.band = 0.0
         self.total = 0.0
+        self.hp = 0.0
         self.n = 0
 
     def feed(self, buf, nbytes):
@@ -347,13 +357,16 @@ class VoiceMeter:
         sm = self.sums
         band = 0.0
         total = 0.0
+        hp = 0.0
         for k in range(blocks):
             band += sm[k]
             total += sm[32 + k]
+            hp += sm[65 + k]
         pairs = nbytes // 8
         if pairs:
             self.band += band
             self.total += total
+            self.hp += hp
             self.n += pairs
             self.levels.append(max(level_db(band / pairs), DB_MIN))
             if len(self.levels) > MOD_CHUNKS:
@@ -366,8 +379,8 @@ class VoiceMeter:
             return 0.0, 0.0, 0.0, 0.0, False
         band_db = level_db(self.band / self.n)
         total_db = level_db(self.total / self.n)
-        ratio = self.band / self.total if self.total > 0 else 0.0
-        modu = stdev(self.levels)
+        ratio = self.band / self.hp if self.hp > 0 else 0.0  # เทียบกับเสียงเหนือ 250 Hz (เสียงหึ่งต่ำไม่มาถ่วง)
+        modu = spread(self.levels)
         self.discard()
         voice = ratio >= SPEECH_RATIO_MIN and modu >= SPEECH_MOD_DB
         return band_db, total_db, ratio, modu, voice
