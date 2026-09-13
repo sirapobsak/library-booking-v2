@@ -872,7 +872,7 @@ function DevicesTab({ api }) {
         <p className="font-semibold">เชื่อมต่อ / ตัดการเชื่อมต่อเซนเซอร์กับเว็บ</p>
         <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
           <li>
-            <b>เชื่อมต่อ:</b> เพิ่มอุปกรณ์ (เลือกโต๊ะ) → เอาคีย์ไปใส่ในส่วนที่ 1 ของ main.py บนบอร์ด (ทำครั้งเดียว)
+            <b>เชื่อมต่อ:</b> เพิ่มอุปกรณ์ (เลือกโต๊ะ) → เอาคีย์ไปใส่ในส่วนที่ 1 ของ main.py บนบอร์ดต่อเว็บ (บอร์ดที่ 2) — ทำครั้งเดียว
           </li>
           <li>
             <b>หยุดทดสอบชั่วคราว:</b> กด “ตัดการเชื่อมต่อ” — บอร์ดหยุดเฝ้าเสียง ไม่หักคะแนน กลับมาเชื่อมใหม่ได้ ไม่ต้องแก้โค้ด
@@ -1107,7 +1107,7 @@ function KeyModal({ info, onClose }) {
         </p>
         <div>
           <p className="mb-1.5 text-sm text-slate-600">
-            วาง 5 บรรทัดนี้ทับของเดิมใน “ส่วนที่ 1 — ตั้งค่า” ของ <code>esp32/noise_meter/main.py</code> (ไฟล์ที่ใส่คีย์แล้วห้ามอัปขึ้น GitHub)
+            วาง 5 บรรทัดนี้ทับของเดิมใน “ส่วนที่ 1 — ตั้งค่า” ของ <code>esp32/link_board/main.py</code> (บอร์ดต่อเว็บ — บอร์ดที่ 2) ไฟล์ที่ใส่คีย์แล้วห้ามอัปขึ้น GitHub
           </p>
           <pre className="overflow-x-auto rounded-xl bg-slate-900 p-4 text-xs leading-relaxed text-slate-100">{snippet}</pre>
         </div>

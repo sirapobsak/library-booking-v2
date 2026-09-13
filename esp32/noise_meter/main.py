@@ -1,9 +1,9 @@
 # ============================================================
-#  เครื่องเฝ้าเสียงประจำโต๊ะ — ESP32 + ไมค์ INMP441 + จอ OLED + LED 3 ดวง
+#  เครื่องเฝ้าเสียงประจำโต๊ะ (บอร์ดที่ 1) — ESP32 + ไมค์ INMP441 + จอ OLED + LED 3 ดวง
 #  ระบบจองห้องสมุด / MicroPython สำหรับ Thonny (บันทึกลงบอร์ดชื่อ main.py)
 #
 #  การทำงาน
-#   1. ถามเว็บทุก 30 วินาที: "ตอนนี้โต๊ะนี้มีคนจองอยู่ไหม จองถึงกี่โมง"
+#   1. รู้ว่าโต๊ะนี้มีคนจองอยู่ไหม จองถึงกี่โมง จาก "บอร์ดต่อเว็บ" (บอร์ดที่ 2) ทางสาย UART
 #   2. เฝ้าเสียงเฉพาะช่วงเวลาที่มีการจอง
 #      ดังเกิน 65 dB สะสมครบ 5 วินาที = เสียงดัง 1 ครั้ง
 #      (ระหว่างจับเวลา ถ้าเงียบติดกันเกิน 10 วินาที = ไม่นับ ไม่หัก ล้างเวลาทิ้งเริ่มใหม่)
@@ -11,12 +11,16 @@
 #      มีเสียงพูดดัง -> 2 วินาทีแรกตาโกรธ (คิ้วขมวด จ้อง) -> 3 วินาทีสุดท้ายนับถอยหลัง 3-2-1 ตัวใหญ่
 #   4. ครบ 5 วินาที = ไฟเตือน: ครั้งที่ 1 เขียว / ครั้งที่ 2 เหลือง / ครั้งที่ 3 ขึ้นไป แดง (แดงค้างจนหมดเวลาจอง)
 #      ขึ้นไฟเตือนแล้ว เวลาที่เงียบกลับเป็น 0 เริ่มจับใหม่
-#   5. ตั้งแต่ครั้งที่ 3 ส่งไปเว็บให้หักคะแนน — หักเท่าไรเป็นไปตามระบบคะแนนบนเว็บ (บอร์ดไม่ได้กำหนดเอง)
+#   5. ตั้งแต่ครั้งที่ 3 ส่งให้บอร์ดที่ 2 ไปหักคะแนนบนเว็บ — หักเท่าไรเป็นไปตามระบบคะแนนบนเว็บ
 #   6. หมดเวลาจอง -> ไฟดับ นับใหม่จาก 0 สำหรับการจองรอบถัดไป
 #   * จับเฉพาะเสียงคนพูด: กรองช่วงความถี่เสียงพูด + ดูจังหวะพยางค์ (พัดลม เครื่องจักร เสียงบี๊บ ไม่นับ)
 #   * ลดเสียงรบกวน (denoise): หักเสียงพื้นหลังของห้อง + ตัดเสียงกระแทกสั้น ๆ ก่อนตัดสินว่าดัง
 #
-#  ไฟล์บนบอร์ด: main.py (ไฟล์นี้) + lib/ssd1306.py (ไลบรารีจอ)
+#  ใช้ ESP32 2 ตัวทำงานร่วมกัน (ตัวเดียวหน่วยความจำไม่พอให้ไมค์ + จอ + HTTPS):
+#    บอร์ดที่ 1 (ไฟล์นี้)                  = ไมค์ นับเสียง จอ ไฟ — ไม่ต่อ WiFi (จอไม่ค้างตอนส่งข้อมูล)
+#    บอร์ดที่ 2 (esp32/link_board/main.py) = WiFi + คุยกับเว็บ (ใส่ WiFi + คีย์ของโต๊ะที่บอร์ดนั้น)
+#    สาย 3 เส้น: บอร์ดนี้ D5 -> D16 บอร์ด 2 / บอร์ดนี้ D15 <- D17 บอร์ด 2 / GND -> GND
+#  ไฟล์บนบอร์ดนี้: main.py (ไฟล์นี้) + lib/ssd1306.py (ไลบรารีจอ)
 #  ต่อสาย (ขาฝั่งขวาของบอร์ด) และวิธีติดตั้ง: ดู esp32/README.md
 # ============================================================
 import gc
@@ -28,8 +32,7 @@ from array import array
 
 import framebuf
 import micropython
-import network
-from machine import I2C, I2S, Pin
+from machine import I2C, I2S, UART, Pin
 
 try:
     import ssd1306
@@ -46,27 +49,14 @@ try:
 except ImportError:
     os = None
 
-try:
-    import urequests as requests
-except ImportError:
-    import requests
-
 
 # ============================================================
 #  ส่วนที่ 1 — ตั้งค่า
 # ============================================================
 
-# ---------- WiFi (ESP32 ใช้ได้แค่ 2.4 GHz) + เว็บ (บรรทัดจากหน้าผู้ดูแล > อุปกรณ์เซนเซอร์) ----------
-# เชื่อมกับโต๊ะไหน = ใช้ค่าของโต๊ะนั้น: หน้าผู้ดูแล > อุปกรณ์เซนเซอร์ > เพิ่มอุปกรณ์ > เลือกโต๊ะ (เช่น D18)
-#   -> ได้ DEVICE_ID + DEVICE_KEY ของโต๊ะนั้น -> บอร์ดเฝ้าเสียงเฉพาะการจองของโต๊ะนั้น
-#   (ย้ายไปโต๊ะอื่นกด "ย้ายโต๊ะ" ในหน้าผู้ดูแลได้เลย ไม่ต้องแก้ไฟล์นี้)
-# !! ไฟล์ที่ใส่คีย์จริงแล้ว ห้ามอัปขึ้น GitHub
-WIFI_SSID = "ชื่อWiFi"
-WIFI_PASS = "รหัสWiFi"
-SUPABASE_URL = "https://xxxx.supabase.co"
-SUPABASE_ANON_KEY = "sb_publishable_xxxx"
-DEVICE_ID = "ESP-XXXXXX"
-DEVICE_KEY = "ใส่คีย์อุปกรณ์"
+# ---------- เชื่อมกับโต๊ะบนเว็บ ----------
+# บอร์ดนี้ไม่ต่อ WiFi — ชื่อ/รหัส WiFi + ค่าของโต๊ะ (เช่น D18) ใส่ที่บอร์ดต่อเว็บ (esp32/link_board/main.py)
+# บอร์ดนี้เฝ้าเสียงเฉพาะการจองของโต๊ะที่บอร์ดที่ 2 ผูกไว้ (ย้ายโต๊ะกดในหน้าผู้ดูแลได้ ไม่ต้องแก้ไฟล์)
 
 # ---------- กติกาเสียงดัง ----------
 LIMIT_DB = 65              # ดังเกินค่านี้ = เสียงดัง
@@ -92,7 +82,7 @@ SPEECH_MOD_DB = 4.0        # เสียงต้องขึ้น-ลงเ�
 MOD_CHUNKS = 31            # ดูจังหวะขึ้น-ลงย้อนหลังกี่ก้อน (~1 วินาที)
 
 # ---------- โหมดทดสอบ ----------
-# True = ทดสอบวงจรโดยไม่ต่อเว็บ: ถือว่ามีคนจองอยู่ตลอด, ไม่หักคะแนนจริง, กดปุ่ม BOOT = เริ่มรอบใหม่
+# True = ทดสอบวงจรโดยไม่ต้องมีบอร์ดที่ 2: ถือว่ามีคนจองอยู่ตลอด, ไม่หักคะแนนจริง, กดปุ่ม BOOT = เริ่มรอบใหม่
 TEST_MODE = False
 
 
@@ -108,18 +98,21 @@ PIN_LED_GREEN = 17     # LED เขียว (ผ่านตัวต้าน�
 PIN_LED_YELLOW = 16    # LED เหลือง (ผ่านตัวต้านทาน 220Ω)
 PIN_LED_RED = 4        # LED แดง (ผ่านตัวต้านทาน 220Ω)
 PIN_BOOT = 0           # ปุ่ม BOOT บนบอร์ด (ไม่ต้องต่อสาย)
+PIN_LINK_TX = 5        # ส่งไปบอร์ดต่อเว็บ (ต่อเข้า D16 ของบอร์ด 2)
+PIN_LINK_RX = 15       # รับจากบอร์ดต่อเว็บ (ต่อจาก D17 ของบอร์ด 2)
+LINK_BAUD = 115200     # ความเร็วสาย UART (ต้องตรงกับบอร์ด 2)
 
 SAMPLE_RATE = 16000          # อ่านเสียง 16,000 ครั้งต่อวินาที
 MIC_SENSITIVITY_DBFS = -26   # INMP441: เสียง 94 dB อ่านได้ -26 dBFS (จาก datasheet ของไมค์)
 CHUNK_SAMPLES = 512          # อ่านทีละ 512 ค่า (~0.03 วินาที)
-MIC_IBUF = 8192              # ที่พักเสียงของไมค์ (ไบต์) — เล็กลงเหลือหน่วยความจำให้ HTTPS มากขึ้น
+MIC_IBUF = 16384             # ที่พักเสียงของไมค์ (ไบต์)
 WINDOW_MS = 125              # สรุปค่า dB ทุก 1/8 วินาที
 DRAW_MS = 200                # วาดจอใหม่ทุก 0.2 วินาที
 PRINT_MS = 1000              # พิมพ์ค่าลง Shell ของ Thonny ทุก 1 วินาที
 WARMUP_MS = 1000             # ไมค์เพิ่งเปิด ค่าช่วงแรกยังไม่นิ่ง ข้ามไปก่อน
-HEARTBEAT_MS = 30000         # ถามสถานะการจองจากเว็บทุก 30 วินาที
-WIFI_RETRY_MS = 20000        # WiFi หลุด -> ลองต่อใหม่ทุก 20 วินาที
-REPORT_RETRY_MS = 10000      # ส่งหักคะแนนไม่สำเร็จ -> ลองใหม่ทุก 10 วินาที
+LINK_TIMEOUT_MS = 20000      # ไม่ได้ยินบอร์ดต่อเว็บเกิน 20 วินาที = สายหลุด (บอร์ด 2 ส่งสถานะทุก 5 วินาที)
+HELLO_MS = 3000              # ยังไม่ได้ยินบอร์ด 2 -> ทักทุก 3 วินาที
+LEVEL_MS = 10000             # ส่งระดับเสียงล่าสุดให้บอร์ด 2 ทุก 10 วินาที (ขึ้นในหน้าผู้ดูแล)
 NOTE_MS = 2500               # ข้อความแจ้งเตือนบนจอค้างไว้กี่มิลลิวินาที
 EYES_MS = 6000               # ตอนเงียบ: โชว์ตากี่มิลลิวินาที ...
 TIMER_MS = 4000              # ... แล้วสลับไปโชว์ "เงียบมาแล้วกี่วินาที" กี่มิลลิวินาที
@@ -460,7 +453,7 @@ class Booking:
 
 
 # ============================================================
-#  ส่วนที่ 6 — ฮาร์ดแวร์ (ไมค์ จอ ไฟ ปุ่ม WiFi)
+#  ส่วนที่ 6 — ฮาร์ดแวร์ (ไมค์ จอ ไฟ ปุ่ม สาย UART)
 # ============================================================
 mic = None
 samples = None
@@ -469,7 +462,7 @@ led_green = None
 led_yellow = None
 led_red = None
 boot_button = None
-wlan = None
+link = None      # สาย UART ไปบอร์ดต่อเว็บ
 
 
 def setup_oled():
@@ -506,20 +499,8 @@ def start_mic():
         )
 
 
-def stop_mic():
-    # ปิดไมค์ชั่วคราวตอนคุยกับเว็บ: ESP32 รุ่นนี้ไม่มี RAM เสริม (PSRAM) หน่วยความจำไม่พอให้ไมค์กับ HTTPS
-    # ทำงานพร้อมกัน -> ปิดไมค์คืนหน่วยความจำให้ HTTPS ก่อน ส่งเสร็จเปิดใหม่ (ช่วงนั้นไม่นับเสียงอยู่แล้ว)
-    global mic
-    if mic is not None:
-        try:
-            mic.deinit()
-        except Exception:
-            pass
-        mic = None
-
-
 def setup_hardware():
-    global samples, oled, led_green, led_yellow, led_red, boot_button, wlan
+    global samples, oled, led_green, led_yellow, led_red, boot_button, link
     led_green = Pin(PIN_LED_GREEN, Pin.OUT, value=0)
     led_yellow = Pin(PIN_LED_YELLOW, Pin.OUT, value=0)
     led_red = Pin(PIN_LED_RED, Pin.OUT, value=0)
@@ -527,7 +508,7 @@ def setup_hardware():
     oled = setup_oled()
     start_mic()
     samples = bytearray(CHUNK_SAMPLES * 4)
-    wlan = network.WLAN(network.STA_IF)
+    link = Link(UART(1, baudrate=LINK_BAUD, tx=PIN_LINK_TX, rx=PIN_LINK_RX))
     try:
         version = os.uname().release
     except Exception:
@@ -536,7 +517,7 @@ def setup_hardware():
 
 
 def mem_report():
-    # หน่วยความจำ 2 ก้อน: ของ Python (gc) กับของระบบ ESP-IDF (WiFi + HTTPS ใช้ก้อนนี้ ต้องมีก้อนว่าง ~40,000 ไบต์)
+    # หน่วยความจำ 2 ก้อน: ของ Python (gc) กับของระบบ ESP-IDF
     gc.collect()
     text = "Python ว่าง %d" % gc.mem_free()
     try:
@@ -555,172 +536,106 @@ def show_leds(strikes):
 
 
 # ============================================================
-#  ส่วนที่ 7 — คุยกับเว็บ (Supabase)
+#  ส่วนที่ 7 — คุยกับบอร์ดต่อเว็บ (บอร์ดที่ 2) ทางสาย UART
+#   บอร์ดนี้ D5 (TX) -> D16 (RX) บอร์ด 2 / บอร์ดนี้ D15 (RX) <- D17 (TX) บอร์ด 2 / GND ต่อถึงกัน
+#   ข้อความ JSON บรรทัดละ 1 ข้อความ:
+#     ส่ง: {"t":"hi"} ขอสถานะ, {"t":"lv","db":62} ระดับเสียง, {"t":"strike","db":70} ส่งไปหักคะแนน
+#     รับ: {"t":"st",...} สถานะทุก 5 วิ (มีคำตอบการจองจากเว็บใน "hb"), {"t":"rep",...} ผลการหักคะแนน
 # ============================================================
-def wifi_configured():
-    return bool(WIFI_SSID) and WIFI_SSID != "ชื่อWiFi"
-
-
-def server_ready():
-    return wifi_configured() and "xxxx" not in SUPABASE_URL and not DEVICE_ID.endswith("XXXXXX")
-
-
-last_wifi_try = None
 last_allowed = True   # ผู้ดูแลเชื่อมต่อเซนเซอร์นี้อยู่ไหม (ครั้งก่อน) — ใช้ดูว่าเพิ่งถูกตัด/เชื่อมต่อ
 last_seat = None      # โต๊ะที่ผูกอยู่ (ครั้งก่อน) — ใช้ดูว่าผู้ดูแลเพิ่งย้ายโต๊ะ
-wifi_announced = False  # พิมพ์ "ต่อ WiFi สำเร็จ" ไปแล้วหรือยัง
-last_rpc_error = None   # คุยกับเว็บครั้งล่าสุดพังเพราะอะไร (None = ครั้งล่าสุดสำเร็จ)
-mem_dumped = False      # พิมพ์รายละเอียดหน่วยความจำไปแล้วหรือยัง (พิมพ์ครั้งเดียวพอ)
-web_seen = False        # เคยคุยกับเว็บสำเร็จแล้วหรือยัง
 
 
-def wifi_status_text():
-    # แปลสถานะ WiFi เป็นภาษาไทย (ช่วยหาสาเหตุตอนต่อไม่ติด)
-    try:
-        st = wlan.status()
-    except Exception:
-        return "ไม่ทราบสถานะ"
-    for attr, text in (
-        ("STAT_WRONG_PASSWORD", "รหัส WiFi ผิด"),
-        ("STAT_NO_AP_FOUND", "ไม่เจอชื่อ WiFi นี้ (ต้องเป็น 2.4 GHz และอยู่ใกล้เราเตอร์)"),
-        ("STAT_CONNECT_FAIL", "ต่อไม่สำเร็จ"),
-        ("STAT_CONNECTING", "กำลังต่อ"),
-        ("STAT_IDLE", "ยังไม่ได้เริ่มต่อ"),
-    ):
-        if st == getattr(network, attr, None):
-            return text
-    # ESP32 บางเฟิร์มแวร์ส่งรหัสเหตุผลมาเป็นตัวเลข
-    return {
-        201: "ไม่เจอชื่อ WiFi นี้ (ต้องเป็น 2.4 GHz และอยู่ใกล้เราเตอร์)",
-        202: "รหัส WiFi ผิด",
-        203: "เราเตอร์ไม่ให้ต่อ",
-        204: "รหัส WiFi ผิด หรือสัญญาณอ่อน",
-        15: "รหัส WiFi ผิด (ยืนยันตัวไม่ผ่าน)",
-        2: "เราเตอร์ตัดการยืนยันตัว",
-    }.get(st, "สถานะ %s" % st)
+class Link:
+    def __init__(self, uart):
+        self.uart = uart
+        self.buf = b""
+        self.seen_at = None     # ได้ยินบอร์ด 2 ล่าสุดเมื่อไร
+        self.st = {}            # สถานะล่าสุดจากบอร์ด 2
+        self.announced = False
 
-
-def keep_wifi(now):
-    # ต่อ WiFi แบบไม่รอ (จอไม่ค้าง) — ต่อไม่ติด/หลุดเมื่อไร ตัดแล้วต่อใหม่ทุก 20 วินาที
-    global last_wifi_try, wifi_announced
-    if wlan.isconnected():
-        if not wifi_announced:
-            wifi_announced = True
-            print("ต่อ WiFi \"%s\" สำเร็จ — IP %s | %s" % (WIFI_SSID, wlan.ifconfig()[0], mem_report()))
-            print("กำลังถามเว็บครั้งแรก — ระหว่างนี้จอค้างได้ถึง ~20 วินาที ไม่ต้องกด Restart")
-        return True
-    if wifi_announced:
-        wifi_announced = False
-        print("!! WiFi หลุด — กำลังต่อใหม่")
-    if last_wifi_try is None or time.ticks_diff(now, last_wifi_try) > WIFI_RETRY_MS:
-        if last_wifi_try is not None:
-            print("!! ยังต่อ WiFi \"%s\" ไม่ได้ — %s (ลองใหม่)" % (WIFI_SSID, wifi_status_text()))
-            try:
-                wlan.disconnect()  # ล้างสถานะค้างก่อนต่อใหม่
-            except Exception:
-                pass
-        last_wifi_try = now
-        wlan.active(True)
+    def send(self, obj):
+        if self.uart is None:
+            return
         try:
-            wlan.connect(WIFI_SSID, WIFI_PASS)
-        except OSError as e:
-            print("!! สั่งต่อ WiFi ไม่ได้: %s" % e)
-        print("กำลังต่อ WiFi \"%s\" ..." % WIFI_SSID)
-    return False
+            self.uart.write(json.dumps(obj) + "\n")
+        except Exception:
+            pass
 
+    def poll(self, now):
+        # อ่านข้อความที่บอร์ด 2 ส่งมา (ไม่รอ) -> คืนเป็น list ของ dict
+        msgs = []
+        if self.uart is None:
+            return msgs
+        n = self.uart.any()
+        if n:
+            data = self.uart.read(n)
+            if data:
+                self.buf += data
+            if len(self.buf) > 2048:  # สายรบกวน/ข้อมูลเสีย -> ทิ้งของเก่า
+                self.buf = self.buf[-2048:]
+            while b"\n" in self.buf:
+                line, self.buf = self.buf.split(b"\n", 1)
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(msg, dict):
+                    continue
+                self.seen_at = now
+                if not self.announced:
+                    self.announced = True
+                    print("ได้ยินบอร์ดต่อเว็บแล้ว (สาย UART ใช้ได้)")
+                if msg.get("t") == "st":
+                    self.st = msg
+                msgs.append(msg)
+        return msgs
 
-def rpc_error_hint(e):
-    # แปลข้อผิดพลาดตอนส่งข้อมูลเป็นภาษาไทย
-    msg = str(e)
-    if "-202" in msg or "EHOSTUNREACH" in msg:
-        return "หาเว็บไม่เจอ — WiFi นี้ออกอินเทอร์เน็ตได้ไหม (ลองเปิดเว็บจากมือถือที่ต่อ WiFi เดียวกัน)"
-    if "ENOMEM" in msg or "-17040" in msg or isinstance(e, MemoryError):
-        return "หน่วยความจำไม่พอสำหรับ HTTPS (%s) — อัปเดตเฟิร์มแวร์ MicroPython" % msg
-    if "ETIMEDOUT" in msg or "110" in msg or "timed out" in msg:
-        return "หมดเวลารอเว็บ — เน็ตช้าหรือ WiFi นี้บล็อกเว็บภายนอก"
-    if "-29" in msg or "SSL" in msg or "ECONNRESET" in msg or "104" in msg:
-        return "เชื่อมต่อแบบปลอดภัย (HTTPS) ไม่สำเร็จ — ลองใหม่อัตโนมัติ / ถ้าเป็นตลอด อัปเดตเฟิร์มแวร์ MicroPython"
-    return "%s %s" % (type(e).__name__, msg)
+    def alive(self, now):
+        return self.seen_at is not None and time.ticks_diff(now, self.seen_at) < LINK_TIMEOUT_MS
 
-
-def call_rpc(fn, level):
-    # เรียกฟังก์ชันบนเว็บ (ปิดไมค์ระหว่างส่ง ให้ HTTPS มีหน่วยความจำพอ แล้วเปิดไมค์กลับเสมอ)
-    stop_mic()
-    try:
-        return post_rpc(fn, level)
-    finally:
-        start_mic()
-
-
-def post_rpc(fn, level):
-    # POST <SUPABASE_URL>/rest/v1/rpc/<fn>  -> คืนผลเป็น dict (ไม่สำเร็จคืน None)
-    global last_rpc_error, web_seen, mem_dumped
-    body = json.dumps({"p_device": DEVICE_ID, "p_key": DEVICE_KEY, "p_level": int(level)})
-    headers = {"Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY}
-    url = SUPABASE_URL + "/rest/v1/rpc/" + fn
-    for attempt in (1, 2):  # พลาดครั้งแรก (มักเป็นหน่วยความจำ/HTTPS สะดุด) เก็บกวาดแล้วลองอีกรอบ
-        gc.collect()  # HTTPS ใช้หน่วยความจำเยอะ เก็บกวาดก่อน
-        loud = last_rpc_error or not web_seen  # ยังไม่เคยสำเร็จ/เพิ่งพัง -> บอกทุกขั้นใน Shell
-        if loud:
-            print("[%s] กำลังถามเว็บ... (ครั้งที่ %d | %s)" % (fn, attempt, mem_report()))
-        t0 = time.ticks_ms()
-        try:
-            try:
-                r = requests.post(url, data=body, headers=headers, timeout=8)
-            except TypeError:  # เฟิร์มแวร์เก่า requests ไม่มี timeout
-                r = requests.post(url, data=body, headers=headers)
-            code, text = r.status_code, r.text
-            r.close()
-            if loud:
-                print("[%s] เว็บตอบกลับแล้ว HTTP %d (%.1f วินาที)" % (fn, code, time.ticks_diff(time.ticks_ms(), t0) / 1000))
-            break
-        except Exception as e:
-            last_rpc_error = "ส่งไม่สำเร็จ: " + rpc_error_hint(e)
-            print("[%s] %s (ครั้งที่ %d, %.1f วินาที | %s)" % (
-                fn, last_rpc_error, attempt, time.ticks_diff(time.ticks_ms(), t0) / 1000, mem_report()))
-            if attempt == 2:
-                if "ENOMEM" in str(e) and not mem_dumped:
-                    mem_dumped = True
-                    micropython.mem_info()  # รายละเอียดหน่วยความจำ (ถ่ายภาพส่งให้คนช่วยดูได้)
-                    print("!! HTTPS ต้องใช้หน่วยความจำระบบก้อนใหญ่ — แก้: อัปเดตเฟิร์มแวร์ MicroPython เป็นรุ่นล่าสุด"
-                          " (esp32/README.md หัวข้อ 'HTTPS หน่วยความจำไม่พอ')")
-                return None
-    if code != 200:
-        if "BAD_DEVICE" in text:
-            last_rpc_error = "คีย์อุปกรณ์ไม่ถูกต้อง (BAD_DEVICE) — วางค่าจากหน้าผู้ดูแลใหม่"
-        elif code == 401:
-            last_rpc_error = "SUPABASE_ANON_KEY ไม่ถูกต้อง (HTTP 401)"
-        elif code == 404:
-            last_rpc_error = "ไม่เจอฟังก์ชัน %s บนเว็บ — รัน supabase/points.sql (HTTP 404)" % fn
-        else:
-            last_rpc_error = "เว็บตอบ HTTP %d" % code
-        print("[%s] HTTP %d %s" % (fn, code, text[:200]))
-        print("!! " + last_rpc_error)
+    def problem(self, now):
+        # ปัญหาการเชื่อมต่อแบบสั้น ๆ สำหรับจอ (None = ใช้ได้)
+        if not self.alive(now):
+            return "NO LINK"
+        st = self.st
+        if not st.get("setup", True):
+            return "NO SETUP"
+        if not st.get("wifi"):
+            return "NO WIFI"
+        err = st.get("err")
+        if err:
+            return "BAD KEY" if "BAD_DEVICE" in err else "WEB ERR"
+        if "hb" not in st:
+            return "LINKING"
         return None
-    try:
-        data = json.loads(text)
-    except ValueError:
-        last_rpc_error = "เว็บตอบกลับมาอ่านไม่ออก"
+
+    def problem_text(self, now):
+        # ปัญหาเป็นภาษาไทยสำหรับ Shell (None = ใช้ได้)
+        p = self.problem(now)
+        st = self.st
+        if p == "NO LINK":
+            if self.seen_at is None:
+                return "ยังไม่ได้ยินบอร์ดต่อเว็บ — เช็คสาย D5->D16, D15<-D17, GND->GND และเปิดบอร์ดที่ 2"
+            return "บอร์ดต่อเว็บเงียบไปเกิน %d วินาที — เช็คสาย/ไฟของบอร์ดที่ 2" % (LINK_TIMEOUT_MS // 1000)
+        if p == "NO SETUP":
+            return "บอร์ดต่อเว็บยังไม่ได้ตั้งค่า WiFi/คีย์ (ส่วนที่ 1 ของ esp32/link_board/main.py)"
+        if p == "NO WIFI":
+            return "บอร์ดต่อเว็บยังต่อ WiFi ไม่ได้ — %s" % (st.get("wifi_text") or "")
+        if p in ("BAD KEY", "WEB ERR"):
+            return "บอร์ดต่อเว็บคุยกับเว็บไม่ได้ — %s" % st.get("err")
+        if p == "LINKING":
+            return "บอร์ดต่อเว็บกำลังถามเว็บ..."
         return None
-    if last_rpc_error or not web_seen:
-        print("คุยกับเว็บได้แล้ว (%s)" % fn)
-    last_rpc_error = None
-    web_seen = True
-    return data
 
 
-def idle_reason(online, allowed, seat):
+def idle_reason(link, now, allowed, seat):
     # ตอนนี้ทำไมยังไม่เฝ้าเสียง — พิมพ์ลง Shell ทุกวินาที ช่วยหาสาเหตุ
     if TEST_MODE:
         return "TEST_MODE"
-    if not server_ready():
-        return "ยังไม่ได้ตั้งค่า WiFi/เว็บ (ส่วนที่ 1)"
-    if not online:
-        return "ยังต่อ WiFi \"%s\" ไม่ได้ — %s" % (WIFI_SSID, wifi_status_text())
-    if last_rpc_error:
-        return "ยังคุยกับเว็บไม่ได้ — " + last_rpc_error
-    if not web_seen:
-        return "ต่อ WiFi แล้ว กำลังถามเว็บ..."
+    text = link.problem_text(now)
+    if text:
+        return text
     if not allowed:
         return "ผู้ดูแลตัดการเชื่อมต่อเซนเซอร์นี้"
     return "เว็บยืนยันแล้ว: โต๊ะ %s ไม่มีการจองตอนนี้" % seat
@@ -913,8 +828,9 @@ def draw_face(mood, blink):
         oled.text("Z", 118, 12)
 
 
-def draw(counter, booking, now, online, seat, penalty, note=None, allowed=True, quiet_ms=0, calibrating=False):
-    # note = (ข้อความใหญ่, ข้อความเล็ก) หรือ None / penalty = ครั้งถัดไปจะหักเท่าไร (เว็บบอกมา)
+def draw(counter, booking, now, problem, seat, penalty, note=None, allowed=True, quiet_ms=0, calibrating=False):
+    # problem = ปัญหาการเชื่อมต่อ (None = ใช้ได้) / note = (ข้อความใหญ่, ข้อความเล็ก) หรือ None
+    # penalty = ครั้งถัดไปจะหักเท่าไร (เว็บบอกมา)
     if oled is None:
         return
     oled.fill(0)
@@ -923,12 +839,8 @@ def draw(counter, booking, now, online, seat, penalty, note=None, allowed=True, 
     # แถวบน: โต๊ะ (+ เตือนไปแล้วกี่ครั้ง) | สถานะ
     if TEST_MODE:
         status = "TEST"
-    elif not server_ready():
-        status = "NO SETUP"
-    elif not online:
-        status = "NO WIFI"
-    elif last_rpc_error:
-        status = "BAD KEY" if "BAD_DEVICE" in last_rpc_error else "WEB ERR"  # รายละเอียดดูใน Shell
+    elif problem:
+        status = problem  # NO LINK / NO SETUP / NO WIFI / BAD KEY / WEB ERR / LINKING — รายละเอียดดูใน Shell
     elif not allowed:
         status = "OFF"  # ผู้ดูแลตัดการเชื่อมต่อ
     elif booking.active(now):
@@ -973,8 +885,8 @@ def draw(counter, booking, now, online, seat, penalty, note=None, allowed=True, 
                 center_text("CALIBRATING", 56)
             elif not allowed:
                 center_text("DISCONNECTED", 56)
-            elif not TEST_MODE and server_ready() and (not online or last_rpc_error):
-                center_text("SEE SHELL", 56)  # ต่อ WiFi/เว็บไม่ได้ — สาเหตุพิมพ์อยู่ใน Shell
+            elif not TEST_MODE and problem:
+                center_text("SEE SHELL", 56)  # ต่อบอร์ด 2/เว็บไม่ได้ — สาเหตุพิมพ์อยู่ใน Shell
             else:
                 center_text("NO BOOKING", 56)
     oled.show()
@@ -992,10 +904,9 @@ def main():
     allowed = True           # ผู้ดูแลเปิดอุปกรณ์ + การหักแต้มอยู่ไหม
     penalty = 5              # ครั้งถัดไปจะหักเท่าไร (เว็บบอกมาตามระบบคะแนน — บอร์ดไม่ได้กำหนดเอง)
     seat = "TEST" if TEST_MODE else "----"
-    pending = 0              # จำนวนครั้งที่รอส่งไปหักคะแนน
-    last_report_try = None
-    last_heartbeat = None
-    force_heartbeat = True
+    pending = 0              # จำนวนครั้งที่รอส่งให้บอร์ด 2 ไปหักคะแนน
+    last_hello = None        # ทักบอร์ด 2 ล่าสุดเมื่อไร
+    want_hello = True        # ขอสถานะจากบอร์ด 2 เดี๋ยวนี้ (เปิดเครื่อง / การจองเพิ่งหมด)
     note = None              # ข้อความใหญ่บนจอ (บรรทัดใหญ่, บรรทัดเล็ก)
     note_until = 0
     quiet_since = None       # เริ่มเงียบตั้งแต่เมื่อไร (ขึ้นไฟเตือน = เริ่มนับจาก 0 ใหม่)
@@ -1012,7 +923,8 @@ def main():
     db = 0.0
     last_draw = start
     last_print = start
-    online = False
+    last_level = start
+    problem = None           # ปัญหาการเชื่อมต่อ (None = ใช้ได้)
 
     if TEST_MODE:
         booking.start_test(start)
@@ -1022,8 +934,8 @@ def main():
         print("ลดเสียงรบกวน: เปิด — %d วิแรกขอให้เงียบ บอร์ดกำลังฟังเสียงพื้นหลังของห้อง" % CALIBRATE_SECONDS)
     if VOICE_ONLY:
         print("นับเฉพาะเสียงคนพูด: เปิด (ช่วง %d–%d Hz)" % (SPEECH_LOW_HZ, SPEECH_HIGH_HZ))
-    if not TEST_MODE and not server_ready():
-        print("!! ยังไม่ได้ตั้งค่า WiFi/เว็บ (ส่วนที่ 1 ด้านบน) — จะแสดงแค่ค่า dB หรือเปิด TEST_MODE = True เพื่อทดสอบ")
+    if not TEST_MODE:
+        print("รอสัญญาณจากบอร์ดต่อเว็บ (บอร์ดที่ 2) ทางสาย D5/D15 — ไม่มีบอร์ดที่ 2 ให้ตั้ง TEST_MODE = True")
 
     while True:
         # ---------- อ่านเสียงจากไมค์ ----------
@@ -1049,7 +961,7 @@ def main():
             raw_db = band_db if VOICE_ONLY else total_db  # ความดังเฉพาะช่วงเสียงพูด / ทุกความถี่
             chunks = 0
             win_start = now
-            dt = min(elapsed, WINDOW_MS * 2)  # ช่วงที่บอร์ดติดคุยกับเว็บ ไม่นับเป็นเวลาดัง/เงียบ
+            dt = min(elapsed, WINDOW_MS * 2)  # เผื่อลูปสะดุด ไม่นับช่วงยาวผิดปกติเป็นเวลาดัง/เงียบ
             warm = time.ticks_diff(now, start) > WARMUP_MS
             db = denoiser.update(raw_db) if warm else max(raw_db, DB_MIN)
 
@@ -1060,7 +972,7 @@ def main():
                 counter.reset()
                 show_leds(0)
                 pending = 0
-                force_heartbeat = True
+                want_hello = True  # ขอสถานะใหม่จากบอร์ด 2
                 if TEST_MODE:
                     booking.start_test(now)
 
@@ -1099,58 +1011,43 @@ def main():
             while boot_button.value() == 0:
                 time.sleep_ms(20)
 
-        # ---------- คุยกับเว็บ ----------
+        # ---------- คุยกับบอร์ดต่อเว็บ (บอร์ดที่ 2) ทางสาย UART — ไม่ต้องรอเว็บ จอไม่ค้าง ----------
         if TEST_MODE:
             if pending:
                 print("(TEST_MODE) ถ้าต่อเว็บจริงจะหักคะแนน %d แต้มตรงนี้" % penalty)
                 pending = 0
-        elif server_ready():
-            online = keep_wifi(now)
-            if online:
-                # 1) มีครั้งที่ต้องหักคะแนน -> ส่งก่อน
-                if pending and booking.active(now) and (
-                    last_report_try is None or time.ticks_diff(now, last_report_try) >= REPORT_RETRY_MS
-                ):
-                    last_report_try = now
-                    draw(counter, booking, now, online, seat, penalty, ("SENDING", ""), allowed)
-                    res = call_rpc("report_noise", db)
-                    if res is not None:
-                        pending -= 1
-                        status = res.get("status")
-                        print("[report_noise] %s" % res)
-                        if status == "DEDUCTED":
-                            # จำนวนที่หักจริงตามระบบคะแนนบนเว็บ
-                            note = ("-%d PT" % res.get("penalty", penalty), "DEDUCTED")
-                            note_until = time.ticks_add(time.ticks_ms(), NOTE_MS)
-                            force_heartbeat = True  # ถามเว็บว่าครั้งถัดไปจะหักเท่าไร (ระบบหักแรงขึ้นทีละขั้น)
-                        elif status == "DAILY_CAP":
-                            note = ("DAY MAX", "NO MORE TODAY")  # วันนี้โดนหักครบยอดสูงสุดแล้ว
-                            note_until = time.ticks_add(time.ticks_ms(), NOTE_MS)
-                        elif status == "COOLDOWN":
-                            print("!! เว็บยังอยู่ในช่วงพัก — ตั้ง 'ช่วงพักหลังหักแต้ม' ในหน้าผู้ดูแลเป็น 5 วินาที")
-                    win_start = time.ticks_ms()  # ข้ามช่วงที่ติดส่งข้อมูล
-                    meter.discard()
-                    chunks = 0
-
-                # 2) ถามสถานะการจองทุก 30 วินาที
-                #    (ถ้ากำลังจับเวลาเสียงดังอยู่ ขอเลื่อนไปก่อน จอจะได้ไม่ค้างตอนนับถอยหลัง)
-                since = None if last_heartbeat is None else time.ticks_diff(now, last_heartbeat)
-                due = force_heartbeat or since is None or since >= HEARTBEAT_MS
-                busy = counter.loud_ms > 0 and since is not None and since < HEARTBEAT_MS * 3
-                if due and not busy:
-                    last_heartbeat = now
-                    force_heartbeat = False
-                    if not web_seen or last_rpc_error:  # ยังเชื่อมเว็บไม่สำเร็จ -> บอกบนจอว่ากำลังทำอะไร (จอจะค้างช่วงนี้)
-                        draw(counter, booking, now, online, seat, penalty, ("LINKING", "ASKING WEB"), allowed)
-                    res = call_rpc("device_heartbeat", db)
-                    if res is not None:
-                        allowed, penalty, seat, changed = apply_status(res, booking, counter, time.ticks_ms())
-                        if changed:
-                            pending = 0
-                            quiet_since = None
-                    win_start = time.ticks_ms()
-                    meter.discard()
-                    chunks = 0
+        else:
+            for msg in link.poll(now):
+                kind = msg.get("t")
+                if kind == "st" and msg.get("hb"):
+                    # คำตอบการจองจากเว็บ (บอร์ด 2 ลดเวลาที่เหลือให้แล้ว)
+                    allowed, penalty, seat, changed = apply_status(msg["hb"], booking, counter, now)
+                    if changed:
+                        quiet_since = None
+                elif kind == "rep":
+                    status = msg.get("status")
+                    print("[หักคะแนน] %s" % msg)
+                    if status == "DEDUCTED":
+                        # จำนวนที่หักจริงตามระบบคะแนนบนเว็บ
+                        note = ("-%d PT" % msg.get("penalty", penalty), "DEDUCTED")
+                        note_until = time.ticks_add(now, NOTE_MS)
+                    elif status == "DAILY_CAP":
+                        note = ("DAY MAX", "NO MORE TODAY")  # วันนี้โดนหักครบยอดสูงสุดแล้ว
+                        note_until = time.ticks_add(now, NOTE_MS)
+                    elif status == "COOLDOWN":
+                        print("!! เว็บยังอยู่ในช่วงพัก — ตั้ง 'ช่วงพักหลังหักแต้ม' ในหน้าผู้ดูแลเป็น 5 วินาที")
+            # เสียงดังครั้งที่ 3 ขึ้นไป -> ส่งให้บอร์ด 2 (บอร์ด 2 เก็บคิวไว้ ส่งไม่สำเร็จจะลองใหม่เอง)
+            while pending:
+                link.send({"t": "strike", "db": int(db)})
+                pending -= 1
+            if want_hello or (not link.alive(now) and (last_hello is None or time.ticks_diff(now, last_hello) >= HELLO_MS)):
+                link.send({"t": "hi"})
+                last_hello = now
+                want_hello = False
+            if time.ticks_diff(now, last_level) >= LEVEL_MS:
+                link.send({"t": "lv", "db": int(db)})
+                last_level = now
+            problem = link.problem(now)
 
         # ---------- จอ + Shell ----------
         if note and time.ticks_diff(now, note_until) > 0:
@@ -1158,10 +1055,10 @@ def main():
         if time.ticks_diff(now, last_draw) >= DRAW_MS:
             last_draw = now
             quiet_ms = time.ticks_diff(now, quiet_since) if quiet_since is not None else 0
-            draw(counter, booking, now, online, seat, penalty, note, allowed, quiet_ms, denoiser.calibrating())
+            draw(counter, booking, now, problem, seat, penalty, note, allowed, quiet_ms, denoiser.calibrating())
         if time.ticks_diff(now, last_print) >= PRINT_MS:
             last_print = now
-            gc.collect()  # เก็บกวาดทุกวินาที กันหน่วยความจำแตกเป็นก้อนเล็ก ๆ (HTTPS ต้องการก้อนใหญ่)
+            gc.collect()  # เก็บกวาดหน่วยความจำทุกวินาที
             raw = " (ดิบ %.1f, พื้นหลัง %.1f)" % (raw_db, denoiser.floor) if DENOISE and denoiser.floor is not None else ""
             if VOICE_ONLY:
                 raw += " | %s (ช่วงพูด %d%%, จังหวะ %.1f dB)" % ("เสียงคน" if voice else "ไม่ใช่เสียงคน", int(ratio * 100), modu)
@@ -1172,7 +1069,7 @@ def main():
                        booking.minutes_left(now))
                 )
             else:
-                print("dB %.1f%s | %s" % (db, raw, idle_reason(online, allowed, seat)))
+                print("dB %.1f%s | %s" % (db, raw, idle_reason(link, now, allowed, seat)))
 
 
 if __name__ == "__main__":
